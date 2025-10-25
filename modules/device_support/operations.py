@@ -112,6 +112,34 @@ class ChipsetOperations:
             return common + ("fdl1", "fdl2")
         return common
 
+    def partition_tweaks(self, profile: ChipsetProfile) -> Dict[str, List[str]]:
+        """Return partition adjustments to execute after mounting."""
+        tweaks: Dict[str, Dict[str, List[str]]] = {
+            "Samsung Exynos": {
+                "system": [
+                    "sed -i 's/ro.boot.flash.locked=1/ro.boot.flash.locked=0/' {mount}/build.prop",
+                    "touch {mount}/etc/permissions/attestation_unlocked.xml",
+                ],
+                "vendor": [
+                    "echo unlock > {mount}/firmware/status.flag",
+                ],
+            },
+            "MediaTek (MTK)": {
+                "system": [
+                    "sed -i 's/ro.secure=1/ro.secure=0/' {mount}/build.prop",
+                ],
+                "vendor": [
+                    "rm -f {mount}/etc/security/oem.lock", 
+                ],
+            },
+            "Spreadtrum / Unisoc": {
+                "system": [
+                    "sed -i 's/persist.sys.lockstate=1/persist.sys.lockstate=0/' {mount}/build.prop",
+                ],
+            },
+        }
+        return tweaks.get(profile.name, {})
+
     # ------------------------------------------------------------------
     # Security cleanup helpers
     # ------------------------------------------------------------------

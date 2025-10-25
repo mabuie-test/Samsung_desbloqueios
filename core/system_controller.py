@@ -1,6 +1,7 @@
 """High level orchestration layer for Samsung Unlock Pro."""
 from __future__ import annotations
 
+import base64
 import logging
 import subprocess
 import threading
@@ -8,6 +9,9 @@ import time
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, hmac
 
 from modules.device_support.chipset_support import (
     ChipsetProfile,
@@ -32,18 +36,48 @@ class DeviceState(Enum):
     UNLOCKED = 6
 
 
+class SecurityError(RuntimeError):
+    """Erro de segurança genérico mantido para compatibilidade."""
+
+
+class DeviceCryptoSuite:
+    """Utilitário simples para derivar e validar HMACs do dispositivo."""
+
+    def __init__(self):
+        self.backend = default_backend()
+
+    def derive_device_key(self, token: bytes) -> bytes:
+        h = hashes.Hash(hashes.SHA256(), backend=self.backend)
+        h.update(token)
+        return h.finalize()
+
+    def compute_hmac(self, key: bytes, payload: bytes) -> bytes:
+        handler = hmac.HMAC(key, hashes.SHA256(), backend=self.backend)
+        handler.update(payload)
+        return handler.finalize()
+
+
 class SamsungUnlockCore:
     def __init__(self):
         self.device_state = DeviceState.DISCONNECTED
+        self.crypto_suite = DeviceCryptoSuite()
         self.chipset_matrix: ChipsetSupportMatrix = build_default_matrix()
         self.operations = ChipsetOperations()
         self.connection_handler = AdvancedConnectionHandler(self.chipset_matrix, self.operations)
         self.firmware_tools = FirmwareTools(self.operations)
-        self.partition_manager = AdvancedPartitionManager(self.connection_handler, self.firmware_tools, self.operations)
+        self.partition_manager = AdvancedPartitionManager(
+            self.connection_handler,
+            self.firmware_tools,
+            self.operations,
+        )
         self.mdm_remover = AdvancedMDMRemover(self.connection_handler, self.operations)
         self.kg_lock_bypass = AdvancedKGLockBypass(self.connection_handler, self.operations)
         self.frp_bypass = FRPBypassAndroid14(self.connection_handler)
-        self.security_manager = EnhancedSecurityManager(self.connection_handler, self.operations)
+        self.security_manager = EnhancedSecurityManager(
+            self.connection_handler,
+            self.operations,
+            self.crypto_suite,
+        )
         self.pattern_analyzer = SecurityPatternAnalyzer(self.connection_handler)
         self.lock_remover = LockScreenRemovalOrchestrator(self.connection_handler)
 
@@ -88,6 +122,9 @@ class SamsungUnlockCore:
 
             if not self.security_manager.ensure_device_ready(profile):
                 raise RuntimeError("Falha ao preparar o dispositivo para o desbloqueio")
+
+            if not self.security_manager.perform_secure_attestation(profile):
+                raise SecurityError("Falha na verificação criptográfica do dispositivo")
 
             backup_dir = Path("backups") / profile.name.replace(" ", "_")
             self.partition_manager.create_backups(backup_dir)
@@ -161,6 +198,25 @@ class SamsungUnlockCore:
             mount_point = f"/mnt/{partition}"
             self._execute_privileged_command(f"mkdir -p {mount_point}")
             self._execute_privileged_command(f"mount /dev/block/by-name/{partition} {mount_point}")
+        self._modify_partition_structures(profile, critical_partitions)
+
+    def _modify_partition_structures(self, profile: ChipsetProfile, partitions: List[str]):
+        blueprint = self.operations.partition_tweaks(profile)
+        for partition in partitions:
+            commands = blueprint.get(partition, [])
+            if not commands:
+                continue
+            mount_point = f"/mnt/{partition}"
+            for command in commands:
+                try:
+                    self._execute_privileged_command(command.format(mount=mount_point))
+                except Exception as exc:
+                    logging.debug(
+                        "Falha ao aplicar ajuste em %s (%s): %s",
+                        partition,
+                        command,
+                        exc,
+                    )
 
     def _execute_privileged_command(self, command):
         if not self.connection_handler.is_connected():
@@ -242,7 +298,12 @@ class AdvancedConnectionHandler:
 
 
 class AdvancedPartitionManager:
-    def __init__(self, connection_handler: AdvancedConnectionHandler, firmware_tools: "FirmwareTools", operations: ChipsetOperations):
+    def __init__(
+        self,
+        connection_handler: AdvancedConnectionHandler,
+        firmware_tools: "FirmwareTools",
+        operations: ChipsetOperations,
+    ):
         self.connection_handler = connection_handler
         self.firmware_tools = firmware_tools
         self.operations = operations
@@ -324,12 +385,20 @@ class FRPBypassAndroid14:
 
 
 class EnhancedSecurityManager:
-    def __init__(self, connection_handler: AdvancedConnectionHandler, operations: ChipsetOperations):
+    def __init__(
+        self,
+        connection_handler: AdvancedConnectionHandler,
+        operations: ChipsetOperations,
+        crypto_suite: DeviceCryptoSuite,
+    ):
         self.connection_handler = connection_handler
         self.operations = operations
+        self.crypto_suite = crypto_suite
+        self._device_key: Optional[bytes] = None
 
     def initialize(self):
         logging.info("Inicializando verificações de segurança")
+        self._device_key = None
         return True
 
     def ensure_device_ready(self, profile: ChipsetProfile) -> bool:
@@ -345,6 +414,46 @@ class EnhancedSecurityManager:
         except Exception as exc:
             logging.error("Falha ao preparar dispositivo: %s", exc)
             return False
+
+    def perform_secure_attestation(self, profile: ChipsetProfile) -> bool:
+        if not self.connection_handler.is_connected():
+            return False
+        try:
+            token = self.connection_handler.send("getprop ro.boot.bl_unlock_token").encode()
+            if not token:
+                logging.debug("Token de boot vazio, ignorando attestation")
+                return True
+            self._device_key = self.crypto_suite.derive_device_key(token)
+            payload = self._build_attestation_payload(profile)
+            b64_payload = base64.b64encode(payload).decode()
+            response_raw = self.connection_handler.send(
+                f"attestor --payload {b64_payload}"
+            ).strip()
+            try:
+                response = base64.b64decode(response_raw)
+            except Exception:
+                response = response_raw.encode()
+            expected = self.crypto_suite.compute_hmac(self._device_key, payload)
+            if expected != response:
+                logging.error("Attestation HMAC divergente")
+                return False
+            return True
+        except Exception as exc:
+            logging.error("Falha na verificação criptográfica: %s", exc)
+            return False
+
+    def _build_attestation_payload(self, profile: ChipsetProfile) -> bytes:
+        primary_manufacturer = profile.manufacturers[0] if profile.manufacturers else "generic"
+        seed = "|".join(
+            [
+                profile.name,
+                primary_manufacturer,
+                ",".join(profile.preferred_connections),
+            ]
+        ).encode()
+        handler = hmac.HMAC(b"unlock", hashes.SHA256(), backend=self.crypto_suite.backend)
+        handler.update(seed)
+        return handler.finalize()
 
 
 class FirmwareTools:
