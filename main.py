@@ -38,6 +38,11 @@ def main():
             root = tk.Tk()
             app = SamsungUnlockGUI(root)
             root.mainloop()
+
+        elif '--pyqt' in sys.argv:
+            from interfaces.pyqt_interface import run_pyqt_gui
+
+            run_pyqt_gui()
         
         # Modo CLI
         elif '--cli' in sys.argv:
@@ -52,7 +57,8 @@ def main():
         
         else:
             print("Modo de uso:")
-            print("  --gui   : Interface gráfica (padrão)")
+            print("  --gui   : Interface gráfica Tkinter (padrão)")
+            print("  --pyqt  : Interface gráfica avançada em PyQt5")
             print("  --cli   : Interface de linha de comando")
             print("  --api   : Modo servidor API REST")
             print("  --help  : Mostra esta ajuda")

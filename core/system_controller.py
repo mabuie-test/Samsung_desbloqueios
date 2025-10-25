@@ -2,10 +2,13 @@ import logging
 import threading
 import time
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional
 import cryptography
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.backends import default_backend
+
+from modules.firmware import TarMD5Extractor
 
 class DeviceState(Enum):
     DISCONNECTED = 0
@@ -237,7 +240,29 @@ class EnhancedSecurityManager:
     pass
 
 class FirmwareTools:
-    pass
+    """High level helpers that wrap firmware management utilities."""
+
+    def __init__(self):
+        self.extractor = TarMD5Extractor()
+
+    def extract_firmware_package(self, archive_path: str, destination: Optional[str] = None, *, verify: bool = True):
+        """Extract a single ``.tar.md5`` archive to the desired destination."""
+        archive = Path(archive_path)
+        dest = Path(destination) if destination else None
+        result = self.extractor.extract(archive, dest, verify=verify)
+        logging.info(
+            "Extração concluída: %s arquivos para %s (verificado=%s)",
+            len(result.extracted_files),
+            result.destination,
+            result.verified,
+        )
+        return result
+
+    def extract_multiple_packages(self, archives: List[str], *, verify: bool = True):
+        """Batch extraction helper for several archives."""
+        results = self.extractor.extract_many(archives, verify=verify)
+        logging.info("Extração em lote finalizada: %s pacotes", len(results))
+        return results
 
 class SecurityPatternAnalyzer:
     pass
