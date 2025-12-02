@@ -59,9 +59,10 @@ class SamsungUnlockGUI:
     def setup_connection_tab(self):
         """Configura aba de conexão"""
         ttk.Label(self.connection_frame, text="Modo de Conexão:").grid(row=0, column=0)
-        self.connection_mode = ttk.Combobox(self.connection_frame, 
+        self.connection_mode = ttk.Combobox(self.connection_frame,
                                           values=["ADB", "USB Raw", "EDL", "Serial"])
         self.connection_mode.grid(row=0, column=1)
+        self.connection_mode.current(0)
         
         ttk.Label(self.connection_frame, text="Modelo:").grid(row=1, column=0)
         self.device_model = ttk.Entry(self.connection_frame)
@@ -79,6 +80,15 @@ class SamsungUnlockGUI:
         
         self.connection_status = ttk.Label(self.connection_frame, text="Desconectado")
         self.connection_status.grid(row=4, column=0, columnspan=2)
+
+        ttk.Label(
+            self.connection_frame,
+            text="Dica rápida: conecte em ADB quando o aparelho está ligado; use EDL com test-point em emergências. "
+            "Informe modelo e serial/IMEI para que a ferramenta ajuste o perfil correto.",
+            wraplength=480,
+            foreground="gray",
+            justify="left",
+        ).grid(row=5, column=0, columnspan=2, pady=(6, 0), sticky="w")
     
     def setup_mdm_tab(self):
         """Configura aba de remoção de MDM"""
@@ -269,6 +279,15 @@ class SamsungUnlockGUI:
 
         self.firmware_status = ttk.Label(self.firmware_frame, text="Pronto")
         self.firmware_status.grid(row=4, column=0, columnspan=3)
+
+        ttk.Label(
+            self.firmware_frame,
+            text="Sequência: escolha o pacote original, defina um destino (opcional) e clique em Sanitizar/Neutralizar. "
+            "A ferramenta remove apps Google/MDM/FRP e re-assina o pacote para uso direto no Odin.",
+            wraplength=620,
+            foreground="gray",
+            justify="left",
+        ).grid(row=5, column=0, columnspan=3, pady=(6, 0), sticky="w")
 
     def select_archive(self):
         path = filedialog.askopenfilename()

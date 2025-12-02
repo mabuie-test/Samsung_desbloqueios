@@ -90,12 +90,15 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         self.connection_mode = QtWidgets.QComboBox()
         self.connection_mode.addItems(["ADB", "USB Raw", "EDL", "Serial"])
+        self.connection_mode.setCurrentIndex(0)
         form.addRow("Modo de Conexão:", self.connection_mode)
 
         self.device_model = QtWidgets.QLineEdit()
+        self.device_model.setPlaceholderText("Ex: SM-A546E ou modelo equivalente")
         form.addRow("Modelo:", self.device_model)
 
         self.device_serial = QtWidgets.QLineEdit()
+        self.device_serial.setPlaceholderText("Número de série/IMEI para perfis automáticos")
         form.addRow("Serial:", self.device_serial)
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -108,6 +111,14 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.connection_status = QtWidgets.QLabel("Desconectado")
         form.addRow("Status:", self.connection_status)
 
+        helper = QtWidgets.QLabel(
+            "Dica: ADB para aparelhos ligados, EDL com test-point para emergência, USB Raw antes do boot. "
+            "Informe modelo/serial para o ajuste automático do perfil de chipset."
+        )
+        helper.setWordWrap(True)
+        helper.setStyleSheet("color: gray;")
+        form.addRow(helper)
+
         self.connect_button.clicked.connect(self._connect_device)
         self.disconnect_button.clicked.connect(self._disconnect_device)
 
@@ -118,7 +129,9 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout(widget)
 
         self.archive_path = QtWidgets.QLineEdit()
+        self.archive_path.setPlaceholderText("Selecione o .tar.md5 ou pacote multi-marca")
         self.dest_path = QtWidgets.QLineEdit()
+        self.dest_path.setPlaceholderText("Pasta opcional para saída Odin-ready")
 
         browse_archive = QtWidgets.QPushButton("Selecionar pacote")
         browse_dest = QtWidgets.QPushButton("Selecionar destino")
@@ -140,6 +153,14 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         form.addRow(self.sanitize_samsung)
         form.addRow(self.sanitize_multi)
         form.addRow("Status:", self.sanitize_status)
+
+        helper = QtWidgets.QLabel(
+            "Sequência: escolha o pacote original, defina destino (opcional) e acione a neutralização. "
+            "O fluxo limpa Google/MDM/FRP e re-assina para evitar rejeição no Odin."
+        )
+        helper.setWordWrap(True)
+        helper.setStyleSheet("color: gray;")
+        form.addRow(helper)
 
         self.tab_widget.addTab(widget, "Firmware")
 

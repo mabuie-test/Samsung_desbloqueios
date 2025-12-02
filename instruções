@@ -1,0 +1,46 @@
+# Fluxo completo de operação (primeira utilização)
+
+## 1. Preparação inicial
+- **Instalar dependências**: `pip install -r requirements.txt` (Python 3.10+ recomendado).
+- **Drivers**: em Windows, instale drivers Samsung/Qualcomm/MTK/Unisoc; ative a assinatura de drivers se usar cabos EDL.
+- **Cabo e portas**: use cabo USB de boa qualidade e, se possível, porta USB 2.0 para EDL/test-point.
+
+## 2. Escolha da interface
+- **Interface Tk (mais leve)**: `python main.py --tk` ou apenas `python main.py`.
+- **Interface PyQt5 (mais moderna)**: `python main.py --pyqt`.
+- **Linha de comando**: mantenha `python main.py --help` como referência rápida de parâmetros.
+
+## 3. Fluxo recomendado na primeira execução
+1) Abra a interface (Tk ou PyQt) e vá para a aba **Conexão**.
+2) Preencha **Modelo** e **Serial** (ou IMEI) e escolha **Modo**:
+   - *ADB* para aparelhos já ligados/depuração.
+   - *USB Raw* para baixo nível antes do boot.
+   - *EDL* para test-point ou emergência (prioridade Qualcomm/Unisoc).
+   - *Serial* para cabos UART/caixas seriais.
+3) Clique **Conectar** e aguarde status. Em falha, replugue o cabo ou troque de modo.
+4) Com o status "Conectado!", use as abas conforme a necessidade:
+   - **Remoção MDM**: limpa perfis persistentes e verifica remount seguro.
+   - **KG Lock Bypass**: desbloqueio de download mode e KG ativo.
+   - **FRP Bypass**: fluxo automatizado Android 14/13, com fallback multi-chipset.
+   - **Remoção de Bloqueio**: escolha PIN/Senha/Padrão ou **Automático**.
+   - **Firmware**: neutraliza `.tar.md5` ou pacotes multi-marca, remove apps Google/MDM/FRP, re-assina e empacota para Odin.
+5) Acompanhe a aba **Logs** para ver cada etapa (também salva em console/arquivo se configurado).
+6) Depois das ações, clique **Desconectar** para limpar sessões e buffers.
+
+## 4. Firmware neutralizado e Odin-ready
+- Na aba **Firmware**, selecione o pacote original e (opcionalmente) um diretório de saída.
+- Use **Sanitizar Samsung (.tar.md5)** para firmwares Samsung ou **Neutralizar Multi-Marca** para outros fabricantes/extensões.
+- O fluxo faz extração, limpeza (Google/MDM/FRP), reempacota e re-assina para evitar rejeição no Odin.
+
+## 5. Empacotamento e distribuição
+- Para gerar executável standalone em Windows: `python scripts/package_app.py --pyqt --onefile` (ou `--tk`).
+- O resultado fica em `dist/`; copie junto o diretório `native/` se usar recursos de kernel/USB/EDL nativos.
+
+## 6. Recuperação e test-point
+- Se o aparelho não responde, use **EDL** e siga o guia de test-point da aba de conexão (PyQt) ou o texto de dicas (Tk).
+- Após entrar em EDL, repita **Conectar**; o controlador tenta roteamento preferencial e retentativas.
+
+## 7. Boas práticas
+- Execute como Administrador (Windows) para permitir operações privilegiadas/driver.
+- Evite hubs USB; prefira conexão direta.
+- Faça backup antes de operações destrutivas (a ferramenta tenta preservar /data quando suportado).
