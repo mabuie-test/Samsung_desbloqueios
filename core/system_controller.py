@@ -8,7 +8,7 @@ import threading
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, hmac
@@ -70,6 +70,10 @@ class SamsungUnlockCore:
             self.firmware_tools,
             self.operations,
         )
+        self.security_partitions = SecurityPartitionAccessManager(
+            self.connection_handler,
+            self.operations,
+        )
         self.mdm_remover = AdvancedMDMRemover(self.connection_handler, self.operations)
         self.kg_lock_bypass = AdvancedKGLockBypass(self.connection_handler, self.operations)
         self.frp_bypass = FRPBypassAndroid14(self.connection_handler)
@@ -77,6 +81,11 @@ class SamsungUnlockCore:
             self.connection_handler,
             self.operations,
             self.crypto_suite,
+        )
+        self.test_point_unlocker = TestPointUnlockCoordinator(
+            self.chipset_matrix,
+            self.connection_handler,
+            self.operations,
         )
         self.pattern_analyzer = SecurityPatternAnalyzer(self.connection_handler)
         self.lock_remover = LockScreenRemovalOrchestrator(self.connection_handler)
@@ -109,10 +118,14 @@ class SamsungUnlockCore:
 
     def execute_complete_unlock(self, device_info: Dict):
         """Executar processo completo de desbloqueio"""
-        merged_info = merge_device_info(device_info)
+        enriched_info = self.test_point_unlocker.prepare(device_info)
+        merged_info = merge_device_info(enriched_info)
         try:
             if not self.connection_handler.establish_connection(merged_info):
-                raise ConnectionError("Falha na conexão com o dispositivo")
+                logging.warning("Tentativa inicial falhou, reforçando fluxo via test-point")
+                tp_info = self.test_point_unlocker.force_test_point_profile(merged_info)
+                if not self.connection_handler.establish_connection(tp_info, prefer_edl=True):
+                    raise ConnectionError("Falha na conexão com o dispositivo")
 
             profile = self.connection_handler.device_profile
             if not profile:
@@ -129,6 +142,8 @@ class SamsungUnlockCore:
             backup_dir = Path("backups") / profile.name.replace(" ", "_")
             self.partition_manager.create_backups(backup_dir)
 
+            self.security_partitions.unlock_security_partitions(profile)
+
             if not self.firmware_tools.unlock_bootloader(self.connection_handler.current_strategy, profile):
                 raise RuntimeError("Falha no desbloqueio do bootloader")
 
@@ -139,6 +154,8 @@ class SamsungUnlockCore:
 
             if not self.frp_bypass.execute_advanced_bypass():
                 raise RuntimeError("Falha no bypass FRP")
+
+            self.security_partitions.normalize_frp_flags(profile)
 
             if not self.mdm_remover.remove_mdm_persistence():
                 raise RuntimeError("Falha na remoção de MDM")
@@ -186,8 +203,7 @@ class SamsungUnlockCore:
             "iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080",
             "ip rule add from all lookup main pref 9999",
         ]
-        for command in commands:
-            self._execute_privileged_command(command)
+        self.connection_handler.send_batch(commands)
 
     def _rewrite_system_partitions(self):
         profile = self.connection_handler.device_profile
@@ -275,9 +291,11 @@ class AdvancedConnectionHandler:
         self._operations = operations
         self.device_profile: Optional[ChipsetProfile] = None
 
-    def establish_connection(self, device_info: Dict[str, str]) -> bool:
+    def establish_connection(self, device_info: Dict[str, str], prefer_edl: bool = False) -> bool:
         profile = self._matrix.identify(device_info)
         order = self._operations.connection_sequence(profile)
+        if prefer_edl and "edl" in order:
+            order = ["edl"] + [step for step in order if step != "edl"]
         if self._handler.establish_connection(device_info, order):
             self.device_profile = profile
             return True
@@ -292,6 +310,15 @@ class AdvancedConnectionHandler:
 
     def send(self, command: str) -> str:
         return self._handler.send(command)
+
+    def send_batch(self, commands: Iterable[str]) -> List[str]:
+        responses: List[str] = []
+        for command in commands:
+            try:
+                responses.append(self.send(command))
+            except Exception as exc:
+                logging.debug("Falha ao executar comando em lote %s: %s", command, exc)
+        return responses
 
     def emergency_recover(self) -> bool:
         return self._handler.emergency_recover()
@@ -330,6 +357,43 @@ class AdvancedPartitionManager:
         profile = self.connection_handler.device_profile
         firmware_dir.mkdir(parents=True, exist_ok=True)
         return self.firmware_tools.flash_firmware(self.connection_handler.current_strategy, profile, firmware_dir)
+
+
+class SecurityPartitionAccessManager:
+    def __init__(self, connection_handler: AdvancedConnectionHandler, operations: ChipsetOperations):
+        self.connection_handler = connection_handler
+        self.operations = operations
+
+    def unlock_security_partitions(self, profile: ChipsetProfile) -> bool:
+        if not self.connection_handler.is_connected():
+            return False
+        success = True
+        for partition in self.operations.security_partitions(profile):
+            try:
+                self.connection_handler.send(
+                    f"if [ -e /dev/block/by-name/{partition} ]; then dd if=/dev/zero of=/dev/block/by-name/{partition} bs=4096 count=1; fi"
+                )
+                self.connection_handler.send(
+                    f"if [ -e /dev/block/by-name/{partition} ]; then chmod 0660 /dev/block/by-name/{partition}; fi"
+                )
+                logging.info("Partição crítica %s liberada para escrita", partition)
+            except Exception as exc:
+                logging.debug("Não foi possível ajustar partição %s: %s", partition, exc)
+                success = False
+        return success
+
+    def normalize_frp_flags(self, profile: ChipsetProfile) -> bool:
+        if not self.connection_handler.is_connected():
+            return False
+        commands = [
+            "settings put global device_provisioned 1",
+            "settings put secure user_setup_complete 1",
+            "setprop persist.sys.frp.pst 0",
+        ]
+        if profile.name.startswith("Samsung"):
+            commands.append("content delete --uri content://settings/secure --where \"name='lock_screen_owner_info'\"")
+        self.connection_handler.send_batch(commands)
+        return True
 
 
 class AdvancedMDMRemover:
@@ -522,6 +586,30 @@ class SecurityPatternAnalyzer:
         except Exception as exc:
             logging.debug("Falha ao coletar indicadores de segurança: %s", exc)
         return indicators
+
+
+class TestPointUnlockCoordinator:
+    def __init__(self, matrix: ChipsetSupportMatrix, connection_handler: AdvancedConnectionHandler, operations: ChipsetOperations):
+        self.matrix = matrix
+        self.connection_handler = connection_handler
+        self.operations = operations
+
+    def prepare(self, device_info: Dict[str, str]) -> Dict[str, str]:
+        profile = self.matrix.identify(device_info)
+        for tip in self.operations.test_point_guides(profile):
+            logging.info("Dica de test-point (%s): %s", profile.name, tip)
+        enriched = dict(device_info)
+        enriched.setdefault("test_point", device_info.get("test_point", False))
+        return enriched
+
+    def force_test_point_profile(self, device_info: Dict[str, str]) -> Dict[str, str]:
+        profile = self.matrix.identify(device_info)
+        forced = dict(device_info)
+        forced["test_point"] = True
+        forced.setdefault("key_combo", True)
+        forced.setdefault("software_exploit", False)
+        logging.info("Forçando conexão por test-point para %s", profile.name)
+        return forced
 
 
 class LockScreenRemovalOrchestrator:

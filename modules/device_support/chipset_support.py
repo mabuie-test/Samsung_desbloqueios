@@ -19,6 +19,7 @@ class ChipsetProfile:
     preferred_connections: List[str] = field(default_factory=list)
     bootloader_unlock_methods: List[str] = field(default_factory=list)
     firmware_tooling: List[str] = field(default_factory=list)
+    supported_models: List[str] = field(default_factory=list)
     notes: str = ""
 
     def matches(self, device_info: Dict[str, str]) -> bool:
@@ -71,6 +72,26 @@ class ChipsetSupportMatrix:
                 preferred_connections=["adb", "odin", "fastboot"],
                 bootloader_unlock_methods=["odin_download", "fastboot_oem"],
                 firmware_tooling=["odin", "heimdall"],
+                supported_models=[
+                    "SM-A105F",
+                    "SM-A115F",
+                    "SM-A125F",
+                    "SM-A127F",
+                    "SM-A135F",
+                    "SM-A136B",
+                    "SM-A145P",
+                    "SM-A146B",
+                    "SM-A147F",
+                    "SM-A225F",
+                    "SM-A226B",
+                    "SM-A235F",
+                    "SM-A236B",
+                    "SM-A245F",
+                    "SM-A246E",
+                    "SM-A325F",
+                    "SM-A326B",
+                    "SM-A426B",
+                ],
                 notes="Samsung proprietary download/Odin workflow.",
             ),
             ChipsetProfile(
@@ -132,9 +153,13 @@ class ChipsetSupportMatrix:
 
     def describe_support(self, profile: ChipsetProfile) -> str:
         """Return a human readable summary of the chipset capabilities."""
+        models_note = ""
+        if profile.supported_models:
+            models_note = f" | modelos suportados: {len(profile.supported_models)}"
+
         return (
             f"Perfil: {profile.name} | conexões: {', '.join(profile.preferred_connections)} | "
-            f"ferramentas: {', '.join(profile.firmware_tooling)}"
+            f"ferramentas: {', '.join(profile.firmware_tooling)}{models_note}"
         )
 
 

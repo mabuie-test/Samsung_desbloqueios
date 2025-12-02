@@ -21,6 +21,7 @@ class ChipsetOperations:
             "HiSilicon / Kirin": ["adb", "fastboot"],
             "Generic Android": ["adb", "fastboot"],
         }
+        self._binary_cache: Dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Connection planning
@@ -140,6 +141,34 @@ class ChipsetOperations:
         }
         return tweaks.get(profile.name, {})
 
+    def security_partitions(self, profile: ChipsetProfile) -> Iterable[str]:
+        """Return partitions directly ligadas a bloqueios de OEM/FRP."""
+        if profile.name.startswith("Samsung"):
+            return ("efs", "persistent", "prism", "cm", "cpefs", "frp")
+        if profile.name.startswith("MediaTek"):
+            return ("protect1", "protect2", "frp")
+        if profile.name.startswith("Spreadtrum"):
+            return ("prodnv", "persist", "frp")
+        return ("persist", "frp")
+
+    def test_point_guides(self, profile: ChipsetProfile) -> List[str]:
+        """Simple guidance strings for test-point orientated fluxos."""
+        guides = {
+            "Qualcomm Snapdragon": [
+                "Isolar TP_EDL próximo ao SoC e manter aterramento por 3s ao conectar USB.",
+                "Utilizar cabo com resistência de 300 Ohms para reduzir ruído no curto.",
+            ],
+            "MediaTek (MTK)": [
+                "Curto em TP_BOOT e GND por 2s antes de conectar a USB para forçar preloader.",
+                "Manter bateria desconectada para evitar reinicializações durante o curto.",
+            ],
+            "Samsung Exynos": [
+                "Localizar ponto EDL próximo ao conector de display em placas A-series.",
+                "Após 5s remover curto e validar se a porta 9008/qualcomm surge no gerenciador de dispositivos.",
+            ],
+        }
+        return guides.get(profile.name, [])
+
     # ------------------------------------------------------------------
     # Security cleanup helpers
     # ------------------------------------------------------------------
@@ -173,8 +202,12 @@ class ChipsetOperations:
     # ------------------------------------------------------------------
     def ensure_binary(self, binary: str) -> bool:
         """Return True if ``binary`` is available in PATH."""
+        if binary in self._binary_cache:
+            return self._binary_cache[binary]
+
         result = subprocess.run(["which", binary], capture_output=True, text=True)
-        return result.returncode == 0
+        self._binary_cache[binary] = result.returncode == 0
+        return self._binary_cache[binary]
 
     def locate_images(self, firmware_dir: Path, partitions: Iterable[str]) -> Dict[str, Path]:
         mapping: Dict[str, Path] = {}

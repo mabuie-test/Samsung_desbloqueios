@@ -1,0 +1,42 @@
+Guia rápido - Windows
+=====================
+
+1. Pré-requisitos
+-----------------
+- Windows 10/11 64 bits.
+- Python 3.10+ instalado e adicionado ao PATH.
+- Microsoft Visual C++ Build Tools (para compilar dependências nativas).
+- Drivers Samsung/ADB e libusb instalados (Samsung USB Driver e Zadig, quando necessário).
+
+2. Instalar dependências
+-----------------------
+- Abra o "Prompt de Comando" ou PowerShell na pasta do projeto.
+- Crie (opcional) um ambiente virtual: `python -m venv .venv && .venv\\Scripts\\activate`.
+- Instale os requisitos: `pip install -r requirements.txt`.
+
+3. Extração e preparação de firmware
+------------------------------------
+- Posicione pacotes `.tar.md5` em `firmware/`.
+- Para verificar e extrair: `python -m modules.firmware.tar_md5_extractor --input firmware/SEU_ARQUIVO.tar.md5 --dest firmware/extraido`.
+
+4. Execução da interface
+------------------------
+- GUI PyQt5: `python main.py --gui qt`.
+- GUI Tkinter clássica: `python main.py --gui tk`.
+- Linha de comando direta: `python main.py --model SM-A146B --connection adb --serial SEU_SERIAL`.
+
+5. Empacotamento (build Windows)
+--------------------------------
+- Opcional: gere um executável com PyInstaller: `python scripts/package_app.py --onefile`.
+- O binário aparecerá em `dist/`.
+
+6. Dicas para desbloqueio
+-------------------------
+- Conecte o aparelho com drivers instalados e depuração USB ativada.
+- Para fluxos com test-point (EDL/MTK), coloque o dispositivo em curto conforme o modelo e conecte o cabo USB antes de iniciar a ferramenta.
+- Utilize cabos de boa qualidade e portas USB 2.0 para maior estabilidade.
+
+7. Limpeza e logs
+-----------------
+- Logs são gravados em `samsung_unlock.log`.
+- Para resetar configurações temporárias, remova a pasta `.cache` gerada na raiz do usuário ou limpe `backups/` e `firmware/extraido`.
