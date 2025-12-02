@@ -164,20 +164,49 @@ class EDLEmergencyConnection(ConnectionStrategy):
 
 
 class USBRawConnection(ConnectionStrategy):
+    def __init__(self):
+        super().__init__()
+        self.device: Optional[usb.core.Device] = None
+
     def connect(self, device_info: Dict) -> bool:
         try:
-            dev = usb.core.find(idVendor=int(device_info.get("vid", "0"), 16), idProduct=int(device_info.get("pid", "0"), 16))
-            self.connected = dev is not None
+            vid = int(device_info.get("vid", "0"), 16)
+            pid = int(device_info.get("pid", "0"), 16)
+            self.device = usb.core.find(idVendor=vid, idProduct=pid)
+            self.connected = self.device is not None
+            if self.connected:
+                logging.info("Conexão USB raw estabelecida para VID:%04x PID:%04x", vid, pid)
             return self.connected
-        except Exception:
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha na conexão USB raw: %s", exc)
             self.connected = False
             return False
 
     def send_command(self, command: str) -> str:
-        raise NotImplementedError("Comunicação USB raw requer implementação específica")
+        if not self.connected or not self.device:
+            raise ConnectionError("Comunicação USB raw não inicializada")
+        try:
+            payload = command.encode("utf-8")
+            endpoint_out = self.device[0][(0, 0)][0]
+            endpoint_in = self.device[0][(0, 0)][1]
+            self.device.write(endpoint_out, payload)
+            response = self.device.read(endpoint_in, 1024)
+            return bytes(response).decode("utf-8", errors="ignore")
+        except Exception as exc:  # pragma: no cover - USB behavior varies
+            logging.error("Erro ao enviar comando USB raw: %s", exc)
+            raise
 
     def emergency_recovery(self) -> bool:
-        return False
+        if not self.device:
+            return False
+        try:
+            usb.util.dispose_resources(self.device)
+            self.connected = False
+            logging.info("Dispositivo USB raw reiniciado (dispose resources)")
+            return True
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha ao reiniciar dispositivo USB raw: %s", exc)
+            return False
 
 
 class SerialConnection(ConnectionStrategy):
@@ -197,12 +226,21 @@ class SerialConnection(ConnectionStrategy):
     def send_command(self, command: str) -> str:
         if not self.ser or not self.connected:
             raise ConnectionError("Porta serial não inicializada")
-        self.ser.write(command.encode("utf-8"))
-        response = self.ser.read(1024)
+        self.ser.reset_input_buffer()
+        self.ser.write((command + "\n").encode("utf-8"))
+        response = self.ser.read_until(b"\n")
         return response.decode("utf-8", errors="ignore")
 
     def emergency_recovery(self) -> bool:
-        return False
+        try:
+            if self.ser and self.connected:
+                self.ser.setDTR(False)
+                self.ser.setRTS(False)
+                self.ser.send_break(duration=0.25)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha na recuperação serial: %s", exc)
+            return False
 
 
 class FastbootConnection(ConnectionStrategy):
