@@ -1,12 +1,14 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 import threading
 import logging
+
+from interfaces.interface_controller import InterfaceController
 
 class SamsungUnlockGUI:
     def __init__(self, root):
         self.root = root
-        self.core = SamsungUnlockCore()
+        self.controller = InterfaceController()
         self.setup_gui()
     
     def setup_gui(self):
@@ -40,13 +42,18 @@ class SamsungUnlockGUI:
         # Aba de Logs
         self.log_frame = ttk.Frame(self.notebook)
         self.setup_log_tab()
-        
+
+        # Aba de Firmware
+        self.firmware_frame = ttk.Frame(self.notebook)
+        self.setup_firmware_tab()
+
         self.notebook.add(self.connection_frame, text="Conexão")
         self.notebook.add(self.mdm_frame, text="Remoção MDM")
         self.notebook.add(self.kg_frame, text="KG Lock Bypass")
         self.notebook.add(self.frp_frame, text="FRP Bypass")
         self.notebook.add(self.lock_removal_frame, text="Remoção de Bloqueio")
         self.notebook.add(self.log_frame, text="Logs")
+        self.notebook.add(self.firmware_frame, text="Firmware")
         self.notebook.pack(expand=1, fill="both")
     
     def setup_connection_tab(self):
@@ -135,13 +142,11 @@ class SamsungUnlockGUI:
         """Conecta ao dispositivo em thread separada"""
         def connect_thread():
             try:
-                device_info = {
-                    'model': self.device_model.get(),
-                    'serial': self.device_serial.get(),
-                    'connection_type': self.connection_mode.get()
-                }
-                
-                if self.core.connection_handler.establish_connection(device_info):
+                if self.controller.connect(
+                    self.device_model.get(),
+                    self.device_serial.get(),
+                    self.connection_mode.get(),
+                ):
                     self.connection_status.config(text="Conectado!")
                     messagebox.showinfo("Sucesso", "Dispositivo conectado!")
                 else:
@@ -155,8 +160,8 @@ class SamsungUnlockGUI:
     
     def disconnect_device(self):
         """Desconecta do dispositivo"""
-        # Implementar desconexão
         self.connection_status.config(text="Desconectado")
+        self.controller.disconnect()
         messagebox.showinfo("Info", "Dispositivo desconectado")
     
     def remove_mdm(self):
@@ -164,8 +169,8 @@ class SamsungUnlockGUI:
         def remove_mdm_thread():
             try:
                 self.mdm_status.config(text="Removendo MDM...")
-                
-                if self.core.mdm_remover.remove_mdm_persistence():
+
+                if self.controller.remove_mdm():
                     self.mdm_status.config(text="MDM removido com sucesso!")
                     messagebox.showinfo("Sucesso", "MDM removido com sucesso!")
                 else:
@@ -183,8 +188,8 @@ class SamsungUnlockGUI:
         def bypass_kg_thread():
             try:
                 self.kg_status.config(text="Executando bypass KG Lock...")
-                
-                if self.core.kg_lock_bypass.execute_kg_lock_bypass():
+
+                if self.controller.bypass_kg():
                     self.kg_status.config(text="KG Lock bypassado com sucesso!")
                     messagebox.showinfo("Sucesso", "KG Lock bypassado com sucesso!")
                 else:
@@ -202,8 +207,8 @@ class SamsungUnlockGUI:
         def bypass_frp_thread():
             try:
                 self.frp_status.config(text="Executando bypass FRP...")
-                
-                if self.core.frp_bypass.execute_advanced_bypass():
+
+                if self.controller.bypass_frp():
                     self.frp_status.config(text="FRP bypassado com sucesso!")
                     messagebox.showinfo("Sucesso", "FRP bypassado com sucesso!")
                 else:
@@ -221,12 +226,9 @@ class SamsungUnlockGUI:
         def remove_lock_thread():
             try:
                 self.lock_status.config(text="Removendo bloqueio...")
-                
+
                 lock_type = self.lock_type.get()
-                if lock_type == "Automático":
-                    lock_type = None
-                
-                if self.core.remove_screen_lock(lock_type):
+                if self.controller.remove_lock(lock_type):
                     self.lock_status.config(text="Bloqueio removido com sucesso!")
                     messagebox.showinfo("Sucesso", "Bloqueio removido com sucesso!")
                 else:
@@ -236,8 +238,74 @@ class SamsungUnlockGUI:
             except Exception as e:
                 self.lock_status.config(text=f"Erro: {str(e)}")
                 messagebox.showerror("Erro", str(e))
-        
+
         threading.Thread(target=remove_lock_thread, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Firmware
+    # ------------------------------------------------------------------
+    def setup_firmware_tab(self):
+        ttk.Label(self.firmware_frame, text="Pacote/Arquivo de Firmware:").grid(row=0, column=0, sticky="w")
+        self.archive_entry = ttk.Entry(self.firmware_frame, width=60)
+        self.archive_entry.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(self.firmware_frame, text="Selecionar", command=self.select_archive).grid(row=0, column=2)
+
+        ttk.Label(self.firmware_frame, text="Destino opcional:").grid(row=1, column=0, sticky="w")
+        self.dest_entry = ttk.Entry(self.firmware_frame, width=60)
+        self.dest_entry.grid(row=1, column=1, padx=5, pady=5)
+        ttk.Button(self.firmware_frame, text="Selecionar", command=self.select_destination).grid(row=1, column=2)
+
+        ttk.Button(
+            self.firmware_frame,
+            text="Sanitizar Samsung (.tar.md5)",
+            command=self.sanitize_samsung,
+        ).grid(row=2, column=0, columnspan=3, pady=6)
+
+        ttk.Button(
+            self.firmware_frame,
+            text="Neutralizar Multi-Marca",
+            command=self.sanitize_multibrand,
+        ).grid(row=3, column=0, columnspan=3, pady=6)
+
+        self.firmware_status = ttk.Label(self.firmware_frame, text="Pronto")
+        self.firmware_status.grid(row=4, column=0, columnspan=3)
+
+    def select_archive(self):
+        path = filedialog.askopenfilename()
+        if path:
+            self.archive_entry.delete(0, tk.END)
+            self.archive_entry.insert(0, path)
+
+    def select_destination(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.dest_entry.delete(0, tk.END)
+            self.dest_entry.insert(0, path)
+
+    def sanitize_samsung(self):
+        self._run_sanitization(self.controller.sanitize_firmware)
+
+    def sanitize_multibrand(self):
+        self._run_sanitization(self.controller.sanitize_multi_brand)
+
+    def _run_sanitization(self, action):
+        archive = self.archive_entry.get()
+        destination = self.dest_entry.get() or None
+        if not archive:
+            messagebox.showwarning("Arquivo", "Selecione um pacote de firmware")
+            return
+
+        def task():
+            self.firmware_status.config(text="Processando...")
+            ok = action(archive, destination)
+            if ok:
+                self.firmware_status.config(text="Pacote neutralizado e assinado")
+                messagebox.showinfo("Sucesso", "Pacote pronto para uso no Odin")
+            else:
+                self.firmware_status.config(text="Falha na neutralização")
+                messagebox.showerror("Erro", "Falha ao processar firmware")
+
+        threading.Thread(target=task, daemon=True).start()
 
 class TextHandler(logging.Handler):
     """Handler de logging para exibir logs na interface gráfica"""

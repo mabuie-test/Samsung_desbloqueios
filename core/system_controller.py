@@ -21,7 +21,12 @@ from modules.device_support.chipset_support import (
 )
 from modules.device_support.operations import ChipsetOperations
 from modules.emergency_com.multi_connection import ConnectionHandler
-from modules.firmware import TarMD5Extractor
+from modules.firmware import (
+    FirmwareNeutralizer,
+    MultiBrandNeutralizationManager,
+    SanitizationResult,
+    TarMD5Extractor,
+)
 from modules.frp_bypass.android_14_frp import Android14FRPBypass
 from modules.lock_screen.lock_remover import LockScreenRemover as ModuleLockScreenRemover
 from modules.native import NativeBridge, NativeStrategyCoordinator
@@ -150,12 +155,17 @@ class SamsungUnlockCore:
             backup_dir = Path("backups") / profile.name.replace(" ", "_")
             self.partition_manager.create_backups(backup_dir)
 
+            prepared = self.firmware_tools.prepare_sanitized_package(profile)
+            target_dir = prepared.prepared_directory if prepared else Path("firmware") / profile.name.replace(" ", "_")
+            if prepared:
+                logging.info("Pacote sanitizado pronto para flash: %s", prepared.signed_package)
+
             self.security_partitions.unlock_security_partitions(profile)
 
             if not self.firmware_tools.unlock_bootloader(self.connection_handler.current_strategy, profile):
                 raise RuntimeError("Falha no desbloqueio do bootloader")
 
-            self.partition_manager.flash_critical_images(Path("firmware") / profile.name.replace(" ", "_"))
+            self.partition_manager.flash_critical_images(target_dir)
 
             if not self.force_routing_and_remount():
                 raise RuntimeError("Falha no roteamento e remontagem")
@@ -535,6 +545,8 @@ class FirmwareTools:
     def __init__(self, operations: ChipsetOperations):
         self.extractor = TarMD5Extractor()
         self.operations = operations
+        self.neutralizer = FirmwareNeutralizer(self.extractor)
+        self.multi_brand_manager = MultiBrandNeutralizationManager(self.neutralizer)
 
     def extract_firmware_package(self, archive_path: str, destination: Optional[str] = None, *, verify: bool = True):
         archive = Path(archive_path)
@@ -578,6 +590,25 @@ class FirmwareTools:
                 logging.error("Falha ao enviar flash de %s: %s", partition, exc)
                 success = False
         return success
+
+    # ------------------------------------------------------------------
+    # Novas rotinas de sanitização
+    # ------------------------------------------------------------------
+    def prepare_sanitized_package(
+        self, profile: ChipsetProfile, raw_archives: Optional[List[Path]] = None
+    ) -> Optional[SanitizationResult]:
+        archive_dir = Path("firmware/raw")
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        if raw_archives is None:
+            pattern = f"{profile.name.replace(' ', '_')}*"
+            raw_archives = list(archive_dir.glob(pattern))
+        if not raw_archives:
+            logging.info("Nenhum pacote bruto encontrado em %s", archive_dir)
+            return None
+        target = Path("firmware") / profile.name.replace(" ", "_") / "sanitized"
+        target.mkdir(parents=True, exist_ok=True)
+        result = self.multi_brand_manager.neutralize_any(raw_archives[0], target).sanitized
+        return result
 
 
 class SecurityPatternAnalyzer:

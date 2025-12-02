@@ -7,7 +7,6 @@ Versão Completa com Todas as Funcionalidades
 import logging
 import sys
 import os
-from core.system_controller import SamsungUnlockCore
 from interfaces.gui_interface import SamsungUnlockGUI
 import tkinter as tk
 
@@ -33,11 +32,22 @@ def main():
     
     # Inicializar o sistema
     try:
-        # Modo GUI
-        if len(sys.argv) == 1 or '--gui' in sys.argv:
-            root = tk.Tk()
-            app = SamsungUnlockGUI(root)
-            root.mainloop()
+        gui_choice = None
+        if '--gui' in sys.argv:
+            idx = sys.argv.index('--gui')
+            gui_choice = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else 'tk'
+        elif len(sys.argv) == 1:
+            gui_choice = 'tk'
+
+        if gui_choice:
+            if gui_choice.lower() in {"qt", "pyqt"}:
+                from interfaces.pyqt_interface import run_pyqt_gui
+
+                run_pyqt_gui()
+            else:
+                root = tk.Tk()
+                app = SamsungUnlockGUI(root)
+                root.mainloop()
 
         elif '--pyqt' in sys.argv:
             from interfaces.pyqt_interface import run_pyqt_gui

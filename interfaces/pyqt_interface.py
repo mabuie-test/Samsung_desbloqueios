@@ -7,7 +7,7 @@ from typing import Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from core.system_controller import SamsungUnlockCore
+from interfaces.interface_controller import InterfaceController
 
 
 class LogModel(QtCore.QAbstractListModel):
@@ -56,9 +56,10 @@ class QtLogHandler(logging.Handler):
 class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
     """Main window with tabbed layout replicating existing Tk interface."""
 
-    def __init__(self, core: Optional[SamsungUnlockCore] = None, parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(self, controller: Optional[InterfaceController] = None, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
-        self.core = core or SamsungUnlockCore()
+        self.controller = controller or InterfaceController()
+        self.core = self.controller.core
         self.setWindowTitle("Samsung Unlock Pro - PyQt Edition")
         self.resize(1100, 720)
         self._build_ui()
@@ -80,6 +81,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self._build_kg_tab()
         self._build_frp_tab()
         self._build_lock_tab()
+        self._build_firmware_tab()
         self._build_log_tab()
 
     def _build_connection_tab(self) -> None:
@@ -110,6 +112,36 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.disconnect_button.clicked.connect(self._disconnect_device)
 
         self.tab_widget.addTab(widget, "Conexão")
+
+    def _build_firmware_tab(self) -> None:
+        widget = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(widget)
+
+        self.archive_path = QtWidgets.QLineEdit()
+        self.dest_path = QtWidgets.QLineEdit()
+
+        browse_archive = QtWidgets.QPushButton("Selecionar pacote")
+        browse_dest = QtWidgets.QPushButton("Selecionar destino")
+
+        browse_archive.clicked.connect(self._browse_archive)
+        browse_dest.clicked.connect(self._browse_dest)
+
+        form.addRow("Pacote de firmware:", self.archive_path)
+        form.addRow("Destino (opcional):", self.dest_path)
+        form.addRow(browse_archive, browse_dest)
+
+        self.sanitize_samsung = QtWidgets.QPushButton("Sanitizar Samsung (.tar.md5)")
+        self.sanitize_multi = QtWidgets.QPushButton("Neutralizar Multi-Marca")
+        self.sanitize_status = QtWidgets.QLabel("Pronto")
+
+        self.sanitize_samsung.clicked.connect(lambda: self._run_sanitization(self.controller.sanitize_firmware))
+        self.sanitize_multi.clicked.connect(lambda: self._run_sanitization(self.controller.sanitize_multi_brand))
+
+        form.addRow(self.sanitize_samsung)
+        form.addRow(self.sanitize_multi)
+        form.addRow("Status:", self.sanitize_status)
+
+        self.tab_widget.addTab(widget, "Firmware")
 
     def _build_mdm_tab(self) -> None:
         widget = QtWidgets.QWidget()
@@ -218,7 +250,9 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                     "serial": self.device_serial.text(),
                     "connection_type": self.connection_mode.currentText(),
                 }
-                if self.core.connection_handler.establish_connection(device_info):
+                if self.controller.connect(
+                    device_info["model"], device_info["serial"], device_info["connection_type"]
+                ):
                     self._update_status(self.connection_status, "Conectado!")
                     self._show_info("Sucesso", "Dispositivo conectado!")
                 else:
@@ -233,13 +267,14 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
     def _disconnect_device(self) -> None:
         self._update_status(self.connection_status, "Desconectado")
+        self.controller.disconnect()
         self._show_info("Info", "Dispositivo desconectado")
 
     def _remove_mdm(self) -> None:
         def task():
             try:
                 self._update_status(self.mdm_status, "Removendo MDM...")
-                if self.core.mdm_remover.remove_mdm_persistence():
+                if self.controller.remove_mdm():
                     self._update_status(self.mdm_status, "MDM removido com sucesso!")
                     self._show_info("Sucesso", "MDM removido com sucesso!")
                 else:
@@ -256,7 +291,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         def task():
             try:
                 self._update_status(self.kg_status, "Executando bypass KG Lock...")
-                if self.core.kg_lock_bypass.execute_kg_lock_bypass():
+                if self.controller.bypass_kg():
                     self._update_status(self.kg_status, "KG Lock bypassado com sucesso!")
                     self._show_info("Sucesso", "KG Lock bypassado com sucesso!")
                 else:
@@ -273,7 +308,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         def task():
             try:
                 self._update_status(self.frp_status, "Executando bypass FRP...")
-                if self.core.frp_bypass.execute_advanced_bypass():
+                if self.controller.bypass_frp():
                     self._update_status(self.frp_status, "FRP bypassado com sucesso!")
                     self._show_info("Sucesso", "FRP bypassado com sucesso!")
                 else:
@@ -293,7 +328,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                 lock_type = self.lock_type.currentText()
                 if lock_type == "Automático":
                     lock_type = None
-                if self.core.remove_screen_lock(lock_type):
+                if self.controller.remove_lock(lock_type):
                     self._update_status(self.lock_status, "Bloqueio removido com sucesso!")
                     self._show_info("Sucesso", "Bloqueio removido com sucesso!")
                 else:
@@ -317,6 +352,40 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
     def _show_error(self, title: str, message: str) -> None:
         QtWidgets.QMessageBox.critical(self, title, message)
+
+    def _browse_archive(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Selecionar firmware")
+        if path:
+            self.archive_path.setText(path)
+
+    def _browse_dest(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Selecionar destino")
+        if path:
+            self.dest_path.setText(path)
+
+    def _run_sanitization(self, handler) -> None:
+        archive = self.archive_path.text()
+        destination = self.dest_path.text() or None
+        if not archive:
+            self._show_error("Arquivo", "Escolha um pacote de firmware")
+            return
+
+        def task():
+            try:
+                self._update_status(self.sanitize_status, "Processando...")
+                ok = handler(archive, destination)
+                if ok:
+                    self._update_status(self.sanitize_status, "Pacote neutralizado e assinado")
+                    self._show_info("Sucesso", "Pacote pronto para uso no Odin")
+                else:
+                    self._update_status(self.sanitize_status, "Falha na neutralização")
+                    self._show_error("Erro", "Falha ao processar firmware")
+            except Exception as exc:  # pragma: no cover
+                logging.exception("Falha ao sanitizar firmware")
+                self._update_status(self.sanitize_status, f"Erro: {exc}")
+                self._show_error("Erro", str(exc))
+
+        threading.Thread(target=task, daemon=True).start()
 
 
 def run_pyqt_gui() -> None:
