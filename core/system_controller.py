@@ -24,6 +24,7 @@ from modules.emergency_com.multi_connection import ConnectionHandler
 from modules.firmware import TarMD5Extractor
 from modules.frp_bypass.android_14_frp import Android14FRPBypass
 from modules.lock_screen.lock_remover import LockScreenRemover as ModuleLockScreenRemover
+from modules.native import NativeBridge, NativeStrategyCoordinator
 
 
 class DeviceState(Enum):
@@ -63,7 +64,9 @@ class SamsungUnlockCore:
         self.crypto_suite = DeviceCryptoSuite()
         self.chipset_matrix: ChipsetSupportMatrix = build_default_matrix()
         self.operations = ChipsetOperations()
+        self.native_bridge = NativeBridge()
         self.connection_handler = AdvancedConnectionHandler(self.chipset_matrix, self.operations)
+        self.native_coordinator = NativeStrategyCoordinator(self.connection_handler, self.native_bridge)
         self.firmware_tools = FirmwareTools(self.operations)
         self.partition_manager = AdvancedPartitionManager(
             self.connection_handler,
@@ -87,7 +90,9 @@ class SamsungUnlockCore:
             self.connection_handler,
             self.operations,
         )
-        self.pattern_analyzer = SecurityPatternAnalyzer(self.connection_handler)
+        self.pattern_analyzer = SecurityPatternAnalyzer(
+            self.connection_handler, self.native_bridge
+        )
         self.lock_remover = LockScreenRemovalOrchestrator(self.connection_handler)
 
         self.setup_logging()
@@ -108,6 +113,7 @@ class SamsungUnlockCore:
             logging.info("Inicializando sistema de desbloqueio com matriz multi-chipset")
             self._load_custom_drivers()
             self._check_hardware_requirements()
+            self.native_coordinator.warmup_channels()
             self.security_manager.initialize()
             self._start_device_monitoring()
             logging.info("Sistema inicializado com sucesso")
@@ -132,6 +138,8 @@ class SamsungUnlockCore:
                 raise RuntimeError("Não foi possível identificar o chipset do dispositivo")
 
             logging.info("Perfil detectado: %s", self.chipset_matrix.describe_support(profile))
+
+            self.native_coordinator.reinforce_connection(profile.name)
 
             if not self.security_manager.ensure_device_ready(profile):
                 raise RuntimeError("Falha ao preparar o dispositivo para o desbloqueio")
@@ -163,7 +171,7 @@ class SamsungUnlockCore:
             if not self.kg_lock_bypass.execute_kg_lock_bypass():
                 raise RuntimeError("Falha no bypass KG Lock")
 
-            analysis = self.pattern_analyzer.analyze_security()
+            analysis = self.pattern_analyzer.analyze_security(profile)
             logging.debug("Resumo de integridade pós-desbloqueio: %s", analysis)
 
             self.device_state = DeviceState.UNLOCKED
@@ -185,6 +193,7 @@ class SamsungUnlockCore:
         """Forçar roteamento e remontagem de partições do sistema"""
         try:
             logging.info("Iniciando processo de roteamento e remontagem")
+            self.native_coordinator.ensure_privileged_mounts(["/system", "/vendor", "/odm"])
             self._execute_privileged_command("mount -o remount,rw /system")
             self._execute_privileged_command("mount -o remount,rw /vendor")
             self._execute_privileged_command("mount -o remount,rw /odm")
@@ -572,10 +581,15 @@ class FirmwareTools:
 
 
 class SecurityPatternAnalyzer:
-    def __init__(self, connection_handler: AdvancedConnectionHandler):
+    def __init__(
+        self,
+        connection_handler: AdvancedConnectionHandler,
+        native_bridge: Optional[NativeBridge] = None,
+    ):
         self.connection_handler = connection_handler
+        self.native_bridge = native_bridge
 
-    def analyze_security(self) -> Dict[str, str]:
+    def analyze_security(self, profile: Optional[ChipsetProfile] = None) -> Dict[str, str]:
         if not self.connection_handler.is_connected():
             return {"status": "desconhecido"}
         indicators = {}
@@ -583,6 +597,14 @@ class SecurityPatternAnalyzer:
             indicators["verified_boot"] = self.connection_handler.send("getprop ro.boot.verifiedbootstate").strip()
             indicators["oem_unlock"] = self.connection_handler.send("getprop sys.oem_unlock_allowed").strip()
             indicators["kg_state"] = self.connection_handler.send("getprop ro.security.vaultkeeper.state").strip()
+            log_tail = self.connection_handler.send("dmesg | tail -n 200")
+            patterns = []
+            if self.native_bridge:
+                patterns = self.native_bridge.match_security_patterns(
+                    log_tail, profile.name if profile else None
+                )
+            if patterns:
+                indicators["native_patterns"] = ",".join(patterns)
         except Exception as exc:
             logging.debug("Falha ao coletar indicadores de segurança: %s", exc)
         return indicators
