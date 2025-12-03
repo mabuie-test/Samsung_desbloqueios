@@ -230,6 +230,14 @@ class SamsungUnlockCore:
             logging.error("Falha ao executar reset controlado: %s", exc)
             return False
 
+    def read_samsung_pin_via_odin(self) -> bool:
+        """Tenta extrair PIN/padrão em modo Odin/Download."""
+        try:
+            return self.lock_remover.read_pin_via_odin()
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha ao ler PIN/padrão via Odin: %s", exc)
+            return False
+
     def force_routing_and_remount(self):
         """Forçar roteamento e remontagem de partições do sistema"""
         try:
@@ -402,6 +410,9 @@ class AdvancedConnectionHandler:
 
     def emergency_recover(self) -> bool:
         return self._handler.emergency_recover()
+
+    def wait_for_reboot(self, timeout: float = 60.0, reconnect: bool = True) -> bool:
+        return self._handler.wait_for_reboot(timeout=timeout, reconnect=reconnect)
 
     def device_information(self) -> Dict[str, str]:
         info: Dict[str, str] = {}

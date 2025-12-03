@@ -367,12 +367,12 @@ class SamsungUnlockGUI:
         def remove_mdm_thread():
             try:
                 self.mdm_status.config(text="Removendo MDM...")
-                self.mdm_progress['value'] = 10
-                self._log_connection("MDM: início da rotina")
-
-                if self.controller.remove_mdm():
-                    self.mdm_progress['value'] = 100
+                self.mdm_progress['value'] = 0
+                if self.controller.remove_mdm(
+                    progress_cb=lambda v: self.mdm_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.mdm_status.config(text="MDM removido com sucesso!")
+                    self.mdm_progress['value'] = 100
                     messagebox.showinfo("Sucesso", "MDM removido com sucesso!")
                 else:
                     self.mdm_progress['value'] = 0
@@ -391,10 +391,10 @@ class SamsungUnlockGUI:
         def bypass_kg_thread():
             try:
                 self.kg_status.config(text="Executando bypass KG Lock...")
-                self.kg_progress['value'] = 20
-                self._log_connection("KG: preparando bypass")
-
-                if self.controller.bypass_kg():
+                self.kg_progress['value'] = 0
+                if self.controller.bypass_kg(
+                    progress_cb=lambda v: self.kg_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.kg_progress['value'] = 100
                     self.kg_status.config(text="KG Lock bypassado com sucesso!")
                     messagebox.showinfo("Sucesso", "KG Lock bypassado com sucesso!")
@@ -416,10 +416,10 @@ class SamsungUnlockGUI:
         def bypass_frp_thread():
             try:
                 self.frp_status.config(text=f"Executando bypass FRP ({target})...")
-                self.frp_progress['value'] = 20
-                self._log_connection(f"FRP: iniciando fluxo {target}")
-
-                if self.controller.bypass_frp_version(target):
+                self.frp_progress['value'] = 0
+                if self.controller.bypass_frp_version(
+                    target, progress_cb=lambda v: self.frp_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.frp_progress['value'] = 100
                     self.frp_status.config(text="FRP bypassado com sucesso!")
                     messagebox.showinfo("Sucesso", "FRP bypassado com sucesso!")
@@ -440,11 +440,11 @@ class SamsungUnlockGUI:
         def remove_lock_thread():
             try:
                 self.lock_status.config(text="Removendo bloqueio...")
-                self.lock_progress['value'] = 30
-                self._log_connection("Tela: rotina de desbloqueio iniciada")
-
+                self.lock_progress['value'] = 0
                 lock_type = self.lock_type.get()
-                if self.controller.remove_lock(lock_type):
+                if self.controller.remove_lock(
+                    lock_type, progress_cb=lambda v: self.lock_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.lock_progress['value'] = 100
                     self.lock_status.config(text="Bloqueio removido com sucesso!")
                     messagebox.showinfo("Sucesso", "Bloqueio removido com sucesso!")
@@ -464,8 +464,10 @@ class SamsungUnlockGUI:
         def hard_reset_thread():
             try:
                 self.lock_status.config(text="Executando hard reset...")
-                self.lock_progress['value'] = 40
-                if self.controller.hard_reset():
+                self.lock_progress['value'] = 0
+                if self.controller.hard_reset(
+                    progress_cb=lambda v: self.lock_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.lock_progress['value'] = 100
                     self.lock_status.config(text="Hard reset concluído")
                     messagebox.showinfo("Sucesso", "Hard reset executado.")
@@ -484,8 +486,10 @@ class SamsungUnlockGUI:
         def hard_reset_chip_thread():
             try:
                 self.lock_status.config(text=f"Hard reset dirigido ({chipset})...")
-                self.lock_progress['value'] = 30
-                if self.controller.hard_reset_chipset(chipset):
+                self.lock_progress['value'] = 0
+                if self.controller.hard_reset_chipset(
+                    chipset, progress_cb=lambda v: self.lock_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.lock_progress['value'] = 100
                     self.lock_status.config(text=f"Hard reset {chipset} concluído")
                     messagebox.showinfo("Sucesso", f"Hard reset ({chipset}) executado.")
@@ -504,8 +508,10 @@ class SamsungUnlockGUI:
         def controlled_reset_thread():
             try:
                 self.lock_status.config(text="Reset controlado em andamento...")
-                self.lock_progress['value'] = 25
-                if self.controller.controlled_reset():
+                self.lock_progress['value'] = 0
+                if self.controller.controlled_reset(
+                    progress_cb=lambda v: self.lock_progress.configure(value=v), log_cb=self._log_connection
+                ):
                     self.lock_progress['value'] = 100
                     self.lock_status.config(text="Reset controlado concluído")
                     messagebox.showinfo("Sucesso", "Senha removida sem wipe.")

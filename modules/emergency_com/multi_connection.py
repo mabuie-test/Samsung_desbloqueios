@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import logging
 import shutil
 import subprocess
 import time
@@ -598,6 +599,36 @@ class ConnectionHandler:
         if not self.current_strategy:
             return False
         return self.current_strategy.emergency_recovery()
+
+    def wait_for_reboot(self, *, timeout: float = 60.0, reconnect: bool = True) -> bool:
+        """Aguarda o ciclo de reinício para confirmar operações destrutivas.
+
+        A rotina tenta detectar a desconexão do dispositivo e, opcionalmente,
+        a reconexão subsequente dentro do tempo limite informado.
+        """
+
+        start = time.time()
+        # Espera sumir
+        while time.time() - start < timeout:
+            if not self.is_connected():
+                break
+            time.sleep(1)
+        else:
+            logging.debug("Dispositivo não sinalizou desligamento dentro do timeout de reboot")
+            return False
+
+        if not reconnect:
+            return True
+
+        # Espera voltar
+        while time.time() - start < timeout:
+            found = self.discover_devices()
+            if found:
+                return True
+            time.sleep(1)
+
+        logging.debug("Dispositivo não reconectou dentro do tempo limite de reboot")
+        return False
 
     def discover_devices(self) -> List[Dict[str, str]]:
         """Lista dispositivos disponíveis em ADB, Fastboot, USB e Serial."""

@@ -60,31 +60,91 @@ class InterfaceController:
     # ------------------------------------------------------------------
     # Rotinas de desbloqueio/segurança
     # ------------------------------------------------------------------
-    def remove_mdm(self) -> bool:
-        return self.core.mdm_remover.remove_mdm_persistence()
+    def remove_mdm(self, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "Remoção MDM",
+            self.core.mdm_remover.remove_mdm_persistence,
+            progress_cb,
+            log_cb,
+        )
 
-    def bypass_frp(self) -> bool:
-        return self.core.frp_bypass.execute_advanced_bypass()
+    def _with_feedback(self, label: str, func, progress_cb=None, log_cb=None) -> bool:
+        if log_cb:
+            log_cb(f"{label}: iniciado")
+        if progress_cb:
+            progress_cb(5)
+        ok = func()
+        if progress_cb:
+            progress_cb(100 if ok else 0)
+        if log_cb:
+            log_cb(f"{label}: {'sucesso' if ok else 'falhou'}")
+        return ok
 
-    def bypass_frp_version(self, target: str) -> bool:
-        return self.core.frp_bypass.execute_version_strategy(target)
+    def bypass_frp(self, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "FRP automático",
+            self.core.frp_bypass.execute_advanced_bypass,
+            progress_cb,
+            log_cb,
+        )
 
-    def bypass_kg(self) -> bool:
-        return self.core.kg_lock_bypass.execute_kg_lock_bypass()
+    def bypass_frp_version(self, target: str, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            f"FRP Android {target}",
+            lambda: self.core.frp_bypass.execute_version_strategy(target),
+            progress_cb,
+            log_cb,
+        )
 
-    def remove_lock(self, lock_type: Optional[str] = None) -> bool:
+    def bypass_kg(self, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "Bypass KG",
+            self.core.kg_lock_bypass.execute_kg_lock_bypass,
+            progress_cb,
+            log_cb,
+        )
+
+    def remove_lock(self, lock_type: Optional[str] = None, *, progress_cb=None, log_cb=None) -> bool:
         if lock_type == "Automático":
             lock_type = None
-        return self.core.remove_screen_lock(lock_type)
+        return self._with_feedback(
+            "Remoção de bloqueio",
+            lambda: self.core.remove_screen_lock(lock_type),
+            progress_cb,
+            log_cb,
+        )
 
-    def hard_reset(self) -> bool:
-        return self.core.hard_reset_device()
+    def hard_reset(self, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "Hard reset universal",
+            self.core.hard_reset_device,
+            progress_cb,
+            log_cb,
+        )
 
-    def hard_reset_chipset(self, chipset: str) -> bool:
-        return self.core.hard_reset_by_chipset(chipset)
+    def hard_reset_chipset(self, chipset: str, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            f"Hard reset {chipset or 'genérico'}",
+            lambda: self.core.hard_reset_by_chipset(chipset),
+            progress_cb,
+            log_cb,
+        )
 
-    def controlled_reset(self) -> bool:
-        return self.core.controlled_reset()
+    def controlled_reset(self, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "Reset controlado",
+            self.core.controlled_reset,
+            progress_cb,
+            log_cb,
+        )
+
+    def read_samsung_pin(self, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "Leitura de PIN/padrão (Odin)",
+            self.core.read_samsung_pin_via_odin,
+            progress_cb,
+            log_cb,
+        )
 
     # ------------------------------------------------------------------
     # Firmware

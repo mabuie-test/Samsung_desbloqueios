@@ -3,6 +3,7 @@ import time
 import sqlite3
 import tempfile
 import os
+from pathlib import Path
 from abc import ABC, abstractmethod
 
 class LockRemovalStrategy(ABC):
@@ -10,10 +11,75 @@ class LockRemovalStrategy(ABC):
     def execute(self, connection) -> bool:
         pass
 
+
+def _decode_pattern_file(dump_path: Path) -> str:
+    """Tenta reconstruir uma sequência de padrão a partir de um dump binário simples."""
+
+    if not dump_path.exists():
+        return ""
+
+    data = dump_path.read_bytes()
+    nodes = []
+    for byte in data[:32]:
+        node = byte % 9
+        if node not in nodes:
+            nodes.append(node)
+
+    if not nodes:
+        return ""
+
+    sequence = "->".join(str(n + 1) for n in nodes)
+
+    grid = [["." for _ in range(3)] for _ in range(3)]
+    for idx, node in enumerate(nodes, start=1):
+        row, col = divmod(node, 3)
+        grid[row][col] = str(idx)
+    grid_str = "\n".join(" ".join(row) for row in grid)
+    logging.info("Padrão reconstruído (ordem de desenho): %s\n%s", sequence, grid_str)
+    return sequence
+
+
+class SamsungOdinPinReader(LockRemovalStrategy):
+    def __init__(self):
+        self.supported_lock_types = ["pin", "pattern", "password"]
+        self.supports_hard_reset = False
+
+    def execute(self, connection) -> bool:
+        """Tenta extrair PIN/padrão a partir de dump via heimdall/Odin."""
+
+        current = getattr(connection, "current_name", "").lower()
+        if current and current != "odin":
+            logging.debug("Leitor Odin ignorado fora do modo download")
+            return False
+
+        dump_target = Path(tempfile.gettempdir()) / "lockdata.bin"
+        try:
+            connection.send_command("print-pit --verbose")
+        except Exception:
+            logging.debug("PIT não disponível; seguindo para tentativa de dump")
+
+        try:
+            connection.send_command(f"download --LOCKDATA {dump_target}")
+        except Exception:
+            try:
+                connection.send_command(f"download --USERDATA {dump_target}")
+            except Exception as exc:
+                logging.debug("Dump Odin não pôde ser iniciado: %s", exc)
+                return False
+
+        pattern = _decode_pattern_file(dump_target)
+        if pattern:
+            logging.info("Sequência detectada em download mode: %s", pattern)
+            return True
+
+        logging.info("Dados coletados em Odin, mas nenhum PIN/padrão foi extraído")
+        return False
+
 class LockScreenRemover:
     def __init__(self, connection):
         self.connection = connection
         self.strategies = [
+            SamsungOdinPinReader(),
             ControlledResetStrategy(),
             SPDDiagHardResetStrategy(),
             DatabaseLockRemoval(),
@@ -44,7 +110,7 @@ class LockScreenRemover:
             if strategy.execute(self.connection):
                 logging.info("Bloqueio de tela removido com sucesso!")
                 return True
-            time.sleep(2)
+            time.sleep(0.5)
         
         logging.error("Todas as estratégias de remoção de bloqueio falharam")
         return False
@@ -57,6 +123,7 @@ class LockScreenRemover:
                 continue
             try:
                 if strategy.execute(self.connection):
+                    self._confirm_reboot()
                     return True
             except Exception as exc:
                 logging.warning(f"Falha ao executar hard reset com {strategy.__class__.__name__}: {exc}")
@@ -99,6 +166,7 @@ class LockScreenRemover:
                 self.connection.send_command(cmd)
             except Exception as exc:
                 logging.debug("Falha ao enviar comando %s: %s", cmd, exc)
+        self._confirm_reboot()
         return True
 
     def controlled_reset(self) -> bool:
@@ -111,10 +179,24 @@ class LockScreenRemover:
             self.connection.send_command("rm -f /data/system/gatekeeper.*")
             self.connection.send_command("am broadcast -a android.intent.action.USER_PRESENT")
             self.connection.send_command("svc power stayon true")
+            self._confirm_reboot(reconnect=False)
             return True
         except Exception as exc:
             logging.warning("Reset controlado falhou: %s", exc)
             return False
+
+    def read_pin_via_odin(self) -> bool:
+        """Aciona a estratégia dedicada para extração de PIN/padrão em modo download."""
+        reader = next((s for s in self.strategies if isinstance(s, SamsungOdinPinReader)), None)
+        if not reader:
+            return False
+        return reader.execute(self.connection)
+
+    def _confirm_reboot(self, reconnect: bool = True) -> None:
+        waiter = getattr(self.connection, "wait_for_reboot", None)
+        if callable(waiter):
+            if not waiter(reconnect=reconnect):
+                logging.debug("Reboot não confirmado; dispositivo pode não ter reiniciado")
 
 
 class ControlledResetStrategy(LockRemovalStrategy):
