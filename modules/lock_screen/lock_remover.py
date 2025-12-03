@@ -15,6 +15,7 @@ class LockScreenRemover:
         self.connection = connection
         self.strategies = [
             ControlledResetStrategy(),
+            SPDDiagHardResetStrategy(),
             DatabaseLockRemoval(),
             FileBasedLockRemoval(),
             MemoryPatchLockRemoval(),
@@ -133,6 +134,30 @@ class ControlledResetStrategy(LockRemovalStrategy):
             return True
         except Exception as exc:
             logging.debug("Reset controlado não concluiu: %s", exc)
+            return False
+
+
+class SPDDiagHardResetStrategy(LockRemovalStrategy):
+    def __init__(self):
+        self.supported_lock_types = ['password', 'pin', 'pattern']
+        self.supports_hard_reset = True
+
+    def execute(self, connection) -> bool:
+        """Hard reset otimizado para diag SPD/Unisoc (Mobicel e similares)."""
+        try:
+            # Sequência diag comum para wipe seguro
+            connection.send_command("diag factory-reset --force")
+            connection.send_command("diag erase partition userdata")
+            connection.send_command("diag erase partition cache")
+            # Fallback rápido via broadcast/reboot para garantir aplicação
+            try:
+                connection.send_command("am broadcast -a android.intent.action.MASTER_CLEAR")
+            except Exception:
+                pass
+            connection.send_command("reboot recovery")
+            return True
+        except Exception as exc:
+            logging.debug("Reset SPD/Diag não concluiu: %s", exc)
             return False
 
 

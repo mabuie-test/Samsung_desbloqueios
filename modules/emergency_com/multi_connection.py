@@ -473,6 +473,7 @@ class ConnectionHandler:
         self._last_connected_identity: Dict[str, str] = {}
         self._usb_backend_available: bool = True
         self._warned_usb_backend: bool = False
+        self._usb_backend_failures: int = 0
 
     def establish_connection(self, device_info: Dict, order: Optional[Iterable[str]] = None) -> bool:
         preferred = (device_info.get("connection_type") or "").lower()
@@ -638,12 +639,17 @@ class ConnectionHandler:
                     readable_name = next(filter(None, [product, manufacturer, brand]), "")
                     label = " ".join(filter(None, [readable_name, f"({vendor_id}:{product_id}{port_hint})"])) or f"USB {vendor_id}:{product_id}{port_hint}"
                     connection_type = "usb_raw"
+                    # Heurística para identificar modos específicos
                     if vendor_id == "04e8":
                         connection_type = "odin"
                         label = f"Odin/Download - {label}"
                     elif any(intf.bInterfaceClass == 6 for cfg in dev for intf in cfg):
                         connection_type = "mtp"
                         label = f"MTP - {label}"
+                    elif vendor_id in {"1782", "1ebf"} and any(intf.bInterfaceClass in (255, 224) for cfg in dev for intf in cfg):
+                        # Diagnóstico SPD/Unisoc costuma aparecer como interface vendor-specific
+                        connection_type = "spd_diag"
+                        label = f"SPD/Diag - {label}"
                     devices.append(
                         {
                             "connection_type": connection_type,
@@ -661,7 +667,11 @@ class ConnectionHandler:
                     logging.warning("Backend USB ausente ou libusb não instalada; detecção USB limitada")
                     self._warned_usb_backend = True
             except Exception:
+                self._usb_backend_failures += 1
                 logging.debug("Falha ao enumerar dispositivos USB")
+                if self._usb_backend_failures >= 3:
+                    self._usb_backend_available = False
+                    logging.debug("Desativando enumeração USB após falhas repetidas")
 
         self._last_discovered = devices
 
@@ -717,5 +727,14 @@ class ConnectionHandler:
         if match:
             for key in ("brand", "model", "serial", "connection_type"):
                 base.setdefault(key, match.get(key, ""))
+            # Se ainda faltar modelo, derive a partir do rótulo para evitar "android generic"
+            if not base.get("model") and match.get("label"):
+                base["model"] = match.get("label")
+            if not base.get("brand") and match.get("vendor_id"):
+                base["brand"] = _VENDOR_BRANDS.get(match.get("vendor_id", ""), "")
+        else:
+            # fallback extra com map de vendors
+            if not base.get("brand") and base.get("vendor_id"):
+                base["brand"] = _VENDOR_BRANDS.get(base.get("vendor_id", ""), "")
         return base
 
