@@ -50,6 +50,9 @@ class InterfaceController:
     def fetch_identity(self):
         return self.core.connection_handler._handler.read_identity()
 
+    def set_ultra_mode(self, enabled: bool):
+        self.core.enable_ultra_mode(enabled)
+
     def disconnect(self) -> None:
         logging.info("Interface solicitou desconexão")
         self.core.connection_handler.emergency_recover()

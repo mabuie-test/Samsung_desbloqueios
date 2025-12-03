@@ -476,10 +476,50 @@ class ConnectionHandler:
         self._usb_backend_failures: int = 0
         self._warned_adb_missing: bool = False
         self._warned_fastboot_missing: bool = False
+        self._ultra_mode: bool = False
+        self._ultra_order: List[str] = [
+            "usb_raw",
+            "odin",
+            "mtp",
+            "adb",
+            "spd_diag",
+            "fastboot",
+            "serial",
+            "edl",
+        ]
+
+    def enable_ultra_mode(self, *, order: Optional[Iterable[str]] = None):
+        if order:
+            self._ultra_order = list(order)
+        self._ultra_mode = True
+        logging.info("Modo ultra ativado: ordem %s", self._ultra_order)
+
+    def disable_ultra_mode(self):
+        self._ultra_mode = False
+        logging.info("Modo ultra desativado")
+
+    def _base_order(self) -> List[str]:
+        return ["adb", "mtp", "odin", "usb_raw", "serial", "edl", "fastboot"]
+
+    def _prefill_from_discovery(self, device_info: Dict, preferred: str) -> Dict:
+        enriched = dict(device_info)
+        # Usa cache atual; se vazio, força descoberta antes de conectar.
+        if not self._last_discovered:
+            self.discover_devices()
+        for dev in self._last_discovered:
+            if preferred and dev.get("connection_type", "").lower() == preferred:
+                enriched = {**dev, **enriched}
+                break
+            if dev.get("serial") and enriched.get("serial") and dev["serial"] == enriched["serial"]:
+                enriched = {**dev, **enriched}
+                break
+        return enriched
 
     def establish_connection(self, device_info: Dict, order: Optional[Iterable[str]] = None) -> bool:
         preferred = (device_info.get("connection_type") or "").lower()
-        connection_order = list(order or ["adb", "mtp", "odin", "usb_raw", "serial", "edl", "fastboot"])
+        if self._ultra_mode:
+            device_info = self._prefill_from_discovery(device_info, preferred)
+        connection_order = list(order or (self._ultra_order if self._ultra_mode else self._base_order()))
         if preferred and preferred in connection_order:
             connection_order = [preferred] + [n for n in connection_order if n != preferred]
         for name in connection_order:
@@ -622,9 +662,14 @@ class ConnectionHandler:
         try:
             for port in list_ports.comports():
                 label = f"Serial {port.device} ({port.description})"
+                connection_type = "serial"
+                description_lower = (port.description or "").lower()
+                if "diag" in description_lower or "serial diagnostic" in description_lower:
+                    connection_type = "spd_diag"
+                    label = f"Diag/SPD {port.device} ({port.description})"
                 devices.append(
                     {
-                        "connection_type": "serial",
+                        "connection_type": connection_type,
                         "port": port.device,
                         "label": label,
                     }

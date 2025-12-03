@@ -66,6 +66,14 @@ class SamsungUnlockGUI:
         self.connection_mode.grid(row=0, column=1)
         self.connection_mode.current(0)
 
+        self.ultra_mode_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self.connection_frame,
+            text="Modo Ultra Hacker (multi-estratégia)",
+            variable=self.ultra_mode_var,
+            command=self.toggle_ultra_mode,
+        ).grid(row=0, column=2, sticky="e")
+
         ttk.Label(self.connection_frame, text="Dispositivos detectados:").grid(row=1, column=0, sticky="w")
         self.devices_tree = ttk.Treeview(self.connection_frame, columns=("label",), show="headings", height=5)
         self.devices_tree.heading("label", text="Porta / Identificação")
@@ -348,6 +356,11 @@ class SamsungUnlockGUI:
         self.connection_log.insert(tk.END, message + "\n")
         self.connection_log.see(tk.END)
         self.connection_log.configure(state="disabled")
+
+    def toggle_ultra_mode(self):
+        self.controller.set_ultra_mode(self.ultra_mode_var.get())
+        status = "ativo" if self.ultra_mode_var.get() else "inativo"
+        self._log_connection(f"Modo Ultra Hacker {status}")
     
     def remove_mdm(self):
         """Executa remoção de MDM em thread separada"""

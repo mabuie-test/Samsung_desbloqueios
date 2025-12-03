@@ -112,6 +112,11 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.auto_connect.setChecked(True)
         form.addRow(self.auto_connect)
 
+        self.ultra_mode = QtWidgets.QCheckBox("Modo Ultra Hacker (multi-estratégia)")
+        self.ultra_mode.setChecked(True)
+        self.ultra_mode.stateChanged.connect(self._toggle_ultra_mode)
+        form.addRow(self.ultra_mode)
+
         button_layout = QtWidgets.QHBoxLayout()
         self.connect_button = QtWidgets.QPushButton("Conectar")
         self.disconnect_button = QtWidgets.QPushButton("Desconectar")
@@ -376,6 +381,12 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
+    def _toggle_ultra_mode(self) -> None:
+        enabled = self.ultra_mode.isChecked()
+        self.controller.set_ultra_mode(enabled)
+        status = "ativo" if enabled else "inativo"
+        self._append_connection_log(f"Modo Ultra Hacker {status}")
+
     def _connect_device(self) -> None:
         def task():
             try:

@@ -99,8 +99,16 @@ class SamsungUnlockCore:
             self.connection_handler, self.native_bridge
         )
         self.lock_remover = LockScreenRemovalOrchestrator(self.connection_handler)
+        self.hacker_toolkit = HackerModeOrchestrator(
+            self.connection_handler,
+            self.native_coordinator,
+            self.security_manager,
+            self.frp_bypass,
+            self.lock_remover,
+        )
 
         self.setup_logging()
+        self.hacker_toolkit.enable()
 
     def setup_logging(self):
         logging.basicConfig(
@@ -145,6 +153,7 @@ class SamsungUnlockCore:
             logging.info("Perfil detectado: %s", self.chipset_matrix.describe_support(profile))
 
             self.native_coordinator.reinforce_connection(profile.name)
+            self.hacker_toolkit.recon(profile)
 
             if not self.security_manager.ensure_device_ready(profile):
                 raise RuntimeError("Falha ao preparar o dispositivo para o desbloqueio")
@@ -344,6 +353,12 @@ class AdvancedConnectionHandler:
             return True
         return False
 
+    def enable_ultra_mode(self, enabled: bool = True):
+        if enabled:
+            self.hacker_toolkit.enable()
+        else:
+            self.hacker_toolkit.disable()
+
     def wait_and_connect(self, device_info: Dict[str, str], *, prefer_edl: bool = False, progress_cb=None) -> bool:
         profile = self._matrix.identify(device_info)
         order = self._operations.connection_sequence(profile)
@@ -378,6 +393,12 @@ class AdvancedConnectionHandler:
             except Exception as exc:
                 logging.debug("Falha ao executar comando em lote %s: %s", command, exc)
         return responses
+
+    def enable_ultra_mode(self):
+        self._handler.enable_ultra_mode()
+
+    def disable_ultra_mode(self):
+        self._handler.disable_ultra_mode()
 
     def emergency_recover(self) -> bool:
         return self._handler.emergency_recover()
@@ -539,6 +560,11 @@ class UniversalFRPManager:
         self.operations = operations
         self.matrix = matrix
         self.android14 = FRPBypassAndroid14(connection_handler)
+        self._primed = False
+
+    def prime_caches(self):
+        """Pré-carrega comandos e sinaliza modo agressivo para fluxos subsequentes."""
+        self._primed = True
 
     def execute_advanced_bypass(self) -> bool:
         return self.execute_version_strategy("auto")
@@ -877,4 +903,47 @@ class LockScreenRemovalOrchestrator:
             return False
         remover = ModuleLockScreenRemover(self.connection_handler.current_strategy)
         return remover.controlled_reset()
+
+
+class HackerModeOrchestrator:
+    """Coordena a camada "ultra hacker" com heurísticas e reforços extras."""
+
+    def __init__(
+        self,
+        connection_handler: AdvancedConnectionHandler,
+        native_coordinator: NativeStrategyCoordinator,
+        security_manager: EnhancedSecurityManager,
+        frp_manager: UniversalFRPManager,
+        lock_orchestrator: LockScreenRemovalOrchestrator,
+    ) -> None:
+        self.connection_handler = connection_handler
+        self.native_coordinator = native_coordinator
+        self.security_manager = security_manager
+        self.frp_manager = frp_manager
+        self.lock_orchestrator = lock_orchestrator
+        self.enabled = False
+
+    def enable(self):
+        self.enabled = True
+        self.connection_handler.enable_ultra_mode()
+        logging.info("Hacker mode armado para conexões agressivas")
+
+    def disable(self):
+        self.enabled = False
+        self.connection_handler.disable_ultra_mode()
+        logging.info("Hacker mode desarmado")
+
+    def recon(self, profile: ChipsetProfile):
+        if not self.enabled:
+            return
+        # Reforça canais nativos e coleta pistas antes das ações destrutivas.
+        self.native_coordinator.usb_health_probe()
+        self.native_coordinator.ensure_privileged_mounts(["/system", "/vendor", "/efs"])
+        self.security_manager.ensure_device_ready(profile)
+        # Pré-ativa rotas FRP e bloqueio de tela para reduzir falsos positivos de sucesso.
+        self.frp_manager.prime_caches()
+        try:
+            self.lock_orchestrator.remove_lock_screen("controlled")
+        except Exception:
+            logging.debug("Ignorando falha de pré-reset controlado em modo hacker")
 
