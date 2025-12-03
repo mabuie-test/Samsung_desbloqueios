@@ -515,7 +515,11 @@ class ConnectionHandler:
             for dev in usb.core.find(find_all=True):
                 vendor_id = f"{dev.idVendor:04x}"
                 product_id = f"{dev.idProduct:04x}"
-                label = f"USB {vendor_id}:{product_id}"
+                bus = getattr(dev, "bus", None)
+                port_numbers = getattr(dev, "port_numbers", None)
+                port_path = "-".join(str(p) for p in port_numbers) if port_numbers else ""
+                port_hint = f" @bus{bus}:{port_path}" if bus or port_path else ""
+                label = f"USB {vendor_id}:{product_id}{port_hint}".strip()
                 connection_type = "usb_raw"
                 if vendor_id == "04e8":
                     connection_type = "odin"

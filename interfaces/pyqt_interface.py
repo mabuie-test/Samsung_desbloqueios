@@ -64,6 +64,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.resize(1100, 720)
         self._build_ui()
         self._connect_logging()
+        self._discovered: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # UI construction helpers
@@ -96,7 +97,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.devices_view = QtWidgets.QListWidget()
         form.addRow("Dispositivos detectados:", self.devices_view)
         refresh_btn = QtWidgets.QPushButton("Atualizar")
-        refresh_btn.clicked.connect(self._refresh_devices)
+        refresh_btn.clicked.connect(lambda: self._refresh_devices(auto=False))
         form.addRow(refresh_btn)
 
         self.device_model = QtWidgets.QLineEdit()
@@ -125,10 +126,19 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         helper.setStyleSheet("color: gray;")
         form.addRow(helper)
 
+        self.connection_log = QtWidgets.QTextEdit()
+        self.connection_log.setReadOnly(True)
+        self.connection_log.setPlaceholderText("Logs de conexão, detecções e portas aparecerão aqui")
+        self.connection_log.setMaximumHeight(150)
+        font = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
+        self.connection_log.setFont(font)
+        form.addRow("Logs:", self.connection_log)
+
         self.connect_button.clicked.connect(self._connect_device)
         self.disconnect_button.clicked.connect(self._disconnect_device)
 
-        self._refresh_devices()
+        self._refresh_devices(auto=False)
+        self._start_auto_refresh()
 
         self.tab_widget.addTab(widget, "Conexão")
 
@@ -282,6 +292,13 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
         logging.getLogger().addHandler(handler)
 
+    def _start_auto_refresh(self) -> None:
+        self.discovery_timer = QtCore.QTimer(self)
+        self.discovery_timer.setInterval(2500)
+        self.discovery_timer.timeout.connect(lambda: self._refresh_devices(auto=True))
+        self.discovery_timer.start()
+        self._append_connection_log("Monitor de detecção automática iniciado")
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -302,13 +319,16 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                     if identity.get("serial"):
                         self._update_line(self.device_serial, identity.get("serial"))
                     self._update_status(self.connection_status, "Conectado!")
+                    self._append_connection_log(f"Conexão ativa via {mode} - {serial or 'sem serial'}")
                     self._show_info("Sucesso", "Dispositivo conectado!")
                 else:
                     self._update_status(self.connection_status, "Falha na conexão")
+                    self._append_connection_log("Falha ao conectar dispositivo")
                     self._show_error("Erro", "Falha na conexão")
             except Exception as exc:  # pragma: no cover - defensive
                 logging.exception("Falha ao conectar dispositivo")
                 self._update_status(self.connection_status, f"Erro: {exc}")
+                self._append_connection_log(f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
 
         threading.Thread(target=task, daemon=True).start()
@@ -316,16 +336,35 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
     def _update_line(self, widget: QtWidgets.QLineEdit, value: str) -> None:
         QtCore.QMetaObject.invokeMethod(widget, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, value))
 
-    def _refresh_devices(self) -> None:
+    def _refresh_devices(self, auto: bool = True) -> None:
         devices = self.controller.discover_devices()
-        self._discovered = {d.get("label", f"Dev{i}"): d for i, d in enumerate(devices)}
-        self.devices_view.clear()
-        for label in self._discovered:
-            self.devices_view.addItem(label)
+        new_map = {d.get("label", f"Dev{i}"): d for i, d in enumerate(devices)}
+
+        previous = getattr(self, "_discovered", {})
+        added = set(new_map) - set(previous)
+        removed = set(previous) - set(new_map)
+
+        if not auto or added or removed:
+            self.devices_view.clear()
+            for label in new_map:
+                self.devices_view.addItem(label)
+
+        self._discovered = new_map
+
+        for label in sorted(added):
+            self._append_connection_log(f"Detectado: {label}")
+            info = new_map[label]
+            if info.get("model"):
+                self._update_line(self.device_model, info.get("model", ""))
+            if info.get("serial"):
+                self._update_line(self.device_serial, info.get("serial", ""))
+        for label in sorted(removed):
+            self._append_connection_log(f"Removido: {label}")
 
     def _disconnect_device(self) -> None:
         self._update_status(self.connection_status, "Desconectado")
         self.controller.disconnect()
+        self._append_connection_log("Desconectado do dispositivo")
         self._show_info("Info", "Dispositivo desconectado")
 
     def _remove_mdm(self) -> None:
@@ -404,6 +443,16 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     def _update_status(self, label: QtWidgets.QLabel, message: str) -> None:
         QtCore.QMetaObject.invokeMethod(label, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, message))
+
+    def _append_connection_log(self, message: str) -> None:
+        if not hasattr(self, "connection_log"):
+            return
+        QtCore.QMetaObject.invokeMethod(
+            self.connection_log,
+            "append",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(str, message),
+        )
 
     def _show_info(self, title: str, message: str) -> None:
         QtWidgets.QMessageBox.information(self, title, message)

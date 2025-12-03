@@ -91,6 +91,10 @@ class SamsungUnlockGUI:
         self.connection_status = ttk.Label(self.connection_frame, text="Desconectado")
         self.connection_status.grid(row=6, column=0, columnspan=2)
 
+        ttk.Label(self.connection_frame, text="Logs de conexão:").grid(row=8, column=0, sticky="w")
+        self.connection_log = scrolledtext.ScrolledText(self.connection_frame, width=80, height=8, state="disabled")
+        self.connection_log.grid(row=9, column=0, columnspan=3, padx=5, pady=4, sticky="nsew")
+
         ttk.Label(
             self.connection_frame,
             text="Dica rápida: conecte em ADB quando o aparelho está ligado; use EDL com test-point em emergências. "
@@ -102,8 +106,10 @@ class SamsungUnlockGUI:
 
         # Ajuste de grid para treeview expandir
         self.connection_frame.grid_rowconfigure(2, weight=1)
+        self.connection_frame.grid_rowconfigure(9, weight=1)
         self.connection_frame.grid_columnconfigure(1, weight=1)
         self.refresh_devices()
+        self._schedule_auto_refresh()
     
     def setup_mdm_tab(self):
         """Configura aba de remoção de MDM"""
@@ -188,29 +194,70 @@ class SamsungUnlockGUI:
                         self.device_serial.delete(0, tk.END)
                         self.device_serial.insert(0, identity.get("serial"))
                     self.connection_status.config(text="Conectado!")
+                    self._log_connection(f"Conexão ativa via {mode} - {serial or 'sem serial'}")
                     messagebox.showinfo("Sucesso", "Dispositivo conectado!")
                 else:
                     self.connection_status.config(text="Falha na conexão")
+                    self._log_connection("Falha ao conectar dispositivo")
                     messagebox.showerror("Erro", "Falha na conexão")
             except Exception as e:
                 self.connection_status.config(text=f"Erro: {str(e)}")
+                self._log_connection(f"Erro: {e}")
                 messagebox.showerror("Erro", str(e))
 
         threading.Thread(target=connect_thread, daemon=True).start()
 
-    def refresh_devices(self):
-        self.devices_tree.delete(*self.devices_tree.get_children())
-        self._discovered = {}
-        for idx, device in enumerate(self.controller.discover_devices()):
+    def refresh_devices(self, auto: bool = False):
+        devices = self.controller.discover_devices()
+        new_map = {}
+        for idx, device in enumerate(devices):
             label = device.get("label") or f"Dispositivo {idx+1}"
-            self._discovered[label] = device
-            self.devices_tree.insert("", "end", values=(label,))
-    
+            new_map[label] = device
+
+        previous = getattr(self, "_discovered", {})
+        added = set(new_map) - set(previous)
+        removed = set(previous) - set(new_map)
+
+        if not auto or added or removed:
+            self.devices_tree.delete(*self.devices_tree.get_children())
+            for label in new_map:
+                self.devices_tree.insert("", "end", values=(label,))
+
+        self._discovered = new_map
+
+        for label in sorted(added):
+            self._log_connection(f"Detectado: {label}")
+            info = new_map[label]
+            if info.get("model"):
+                self.device_model.delete(0, tk.END)
+                self.device_model.insert(0, info["model"])
+            if info.get("serial"):
+                self.device_serial.delete(0, tk.END)
+                self.device_serial.insert(0, info["serial"])
+        for label in sorted(removed):
+            self._log_connection(f"Removido: {label}")
+
     def disconnect_device(self):
         """Desconecta do dispositivo"""
         self.connection_status.config(text="Desconectado")
         self.controller.disconnect()
+        self._log_connection("Desconectado do dispositivo")
         messagebox.showinfo("Info", "Dispositivo desconectado")
+
+    def _schedule_auto_refresh(self):
+        self.root.after(2500, self._auto_refresh_devices)
+
+    def _auto_refresh_devices(self):
+        try:
+            self.refresh_devices(auto=True)
+        finally:
+            self._schedule_auto_refresh()
+
+    def _log_connection(self, message: str):
+        self.connection_log.configure(state="normal")
+        self.connection_log.insert(tk.END, message + "\n")
+        self.connection_log.see(tk.END)
+        self.connection_log.configure(state="disabled")
     
     def remove_mdm(self):
         """Executa remoção de MDM em thread separada"""
