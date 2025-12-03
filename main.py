@@ -7,7 +7,7 @@ Versão Completa com Todas as Funcionalidades
 import logging
 import sys
 import os
-from core.system_controller import SamsungUnlockCore
+import ctypes
 from interfaces.gui_interface import SamsungUnlockGUI
 import tkinter as tk
 
@@ -26,18 +26,45 @@ def main():
     """Função principal da aplicação"""
     print("Samsung Unlock Pro - Inicializando...")
     setup_logging()
-    
+
     # Verificar se é root (para algumas operações)
-    if os.geteuid() != 0:
-        print("Algumas funcionalidades podem requerer privilégios de root")
+    try:
+        is_admin = False
+        if hasattr(os, "geteuid"):
+            is_admin = os.geteuid() == 0
+        elif os.name == "nt":
+            # Windows: testar privilégios administrativos
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+        if not is_admin:
+            print("Algumas funcionalidades podem requerer privilégios elevados")
+    except Exception:
+        # Se a detecção falhar, apenas avisar sem interromper a inicialização
+        print("Não foi possível verificar privilégios elevados; continue com cautela")
     
     # Inicializar o sistema
     try:
-        # Modo GUI
-        if len(sys.argv) == 1 or '--gui' in sys.argv:
-            root = tk.Tk()
-            app = SamsungUnlockGUI(root)
-            root.mainloop()
+        gui_choice = None
+        if '--gui' in sys.argv:
+            idx = sys.argv.index('--gui')
+            gui_choice = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else 'tk'
+        elif len(sys.argv) == 1:
+            gui_choice = 'tk'
+
+        if gui_choice:
+            if gui_choice.lower() in {"qt", "pyqt"}:
+                from interfaces.pyqt_interface import run_pyqt_gui
+
+                run_pyqt_gui()
+            else:
+                root = tk.Tk()
+                app = SamsungUnlockGUI(root)
+                root.mainloop()
+
+        elif '--pyqt' in sys.argv:
+            from interfaces.pyqt_interface import run_pyqt_gui
+
+            run_pyqt_gui()
         
         # Modo CLI
         elif '--cli' in sys.argv:
@@ -52,7 +79,8 @@ def main():
         
         else:
             print("Modo de uso:")
-            print("  --gui   : Interface gráfica (padrão)")
+            print("  --gui   : Interface gráfica Tkinter (padrão)")
+            print("  --pyqt  : Interface gráfica avançada em PyQt5")
             print("  --cli   : Interface de linha de comando")
             print("  --api   : Modo servidor API REST")
             print("  --help  : Mostra esta ajuda")

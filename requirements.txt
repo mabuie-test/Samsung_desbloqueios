@@ -6,3 +6,5 @@ pillow>=8.1.2
 tkinter>=0.1.0
 numpy>=1.20.1
 scipy>=1.6.1
+PyQt5>=5.15
+pyinstaller>=5.0

