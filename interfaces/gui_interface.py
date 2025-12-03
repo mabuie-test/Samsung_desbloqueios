@@ -74,6 +74,13 @@ class SamsungUnlockGUI:
         refresh_btn = ttk.Button(self.connection_frame, text="Atualizar", command=self.refresh_devices)
         refresh_btn.grid(row=1, column=2, sticky="e")
 
+        self.auto_connect_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            self.connection_frame,
+            text="Auto conectar assim que plugado",
+            variable=self.auto_connect_var,
+        ).grid(row=1, column=1, sticky="e")
+
         ttk.Label(self.connection_frame, text="Modelo:").grid(row=3, column=0)
         self.device_model = ttk.Entry(self.connection_frame)
         self.device_model.grid(row=3, column=1)
@@ -88,8 +95,11 @@ class SamsungUnlockGUI:
         ttk.Button(self.connection_frame, text="Desconectar",
                   command=self.disconnect_device).grid(row=5, column=1)
 
+        self.connection_progress = ttk.Progressbar(self.connection_frame, mode="determinate", length=280)
+        self.connection_progress.grid(row=6, column=0, columnspan=2, pady=(6, 2), sticky="w")
+
         self.connection_status = ttk.Label(self.connection_frame, text="Desconectado")
-        self.connection_status.grid(row=6, column=0, columnspan=2)
+        self.connection_status.grid(row=7, column=0, columnspan=2)
 
         ttk.Label(self.connection_frame, text="Logs de conexão:").grid(row=8, column=0, sticky="w")
         self.connection_log = scrolledtext.ScrolledText(self.connection_frame, width=80, height=8, state="disabled")
@@ -102,7 +112,7 @@ class SamsungUnlockGUI:
             wraplength=480,
             foreground="gray",
             justify="left",
-        ).grid(row=7, column=0, columnspan=3, pady=(6, 0), sticky="w")
+        ).grid(row=8, column=0, columnspan=3, pady=(6, 0), sticky="w")
 
         # Ajuste de grid para treeview expandir
         self.connection_frame.grid_rowconfigure(2, weight=1)
@@ -114,30 +124,39 @@ class SamsungUnlockGUI:
     def setup_mdm_tab(self):
         """Configura aba de remoção de MDM"""
         ttk.Label(self.mdm_frame, text="Remoção de MDM Persistente").grid(row=0, column=0, columnspan=2)
-        
-        ttk.Button(self.mdm_frame, text="Remover MDM", 
+
+        ttk.Button(self.mdm_frame, text="Remover MDM",
                   command=self.remove_mdm).grid(row=1, column=0)
-        
+
+        self.mdm_progress = ttk.Progressbar(self.mdm_frame, mode="determinate", length=250)
+        self.mdm_progress.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
         self.mdm_status = ttk.Label(self.mdm_frame, text="Pronto para remover MDM")
         self.mdm_status.grid(row=2, column=0, columnspan=2)
     
     def setup_kg_tab(self):
         """Configura aba de bypass KG Lock"""
         ttk.Label(self.kg_frame, text="Bypass KG Lock").grid(row=0, column=0, columnspan=2)
-        
-        ttk.Button(self.kg_frame, text="Executar Bypass KG Lock", 
+
+        ttk.Button(self.kg_frame, text="Executar Bypass KG Lock",
                   command=self.bypass_kg_lock).grid(row=1, column=0)
-        
+
+        self.kg_progress = ttk.Progressbar(self.kg_frame, mode="determinate", length=250)
+        self.kg_progress.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
         self.kg_status = ttk.Label(self.kg_frame, text="Pronto para bypass KG Lock")
         self.kg_status.grid(row=2, column=0, columnspan=2)
     
     def setup_frp_tab(self):
         """Configura aba de bypass FRP"""
         ttk.Label(self.frp_frame, text="Bypass FRP Android 14").grid(row=0, column=0, columnspan=2)
-        
-        ttk.Button(self.frp_frame, text="Executar Bypass FRP", 
+
+        ttk.Button(self.frp_frame, text="Executar Bypass FRP",
                   command=self.bypass_frp).grid(row=1, column=0)
-        
+
+        self.frp_progress = ttk.Progressbar(self.frp_frame, mode="determinate", length=250)
+        self.frp_progress.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
         self.frp_status = ttk.Label(self.frp_frame, text="Pronto para bypass FRP")
         self.frp_status.grid(row=2, column=0, columnspan=2)
     
@@ -150,11 +169,14 @@ class SamsungUnlockGUI:
         self.lock_type.grid(row=0, column=1)
         self.lock_type.current(0)
         
-        ttk.Button(self.lock_removal_frame, text="Remover Bloqueio", 
+        ttk.Button(self.lock_removal_frame, text="Remover Bloqueio",
                   command=self.remove_lock).grid(row=1, column=0, columnspan=2)
-        
+
+        self.lock_progress = ttk.Progressbar(self.lock_removal_frame, mode="determinate", length=250)
+        self.lock_progress.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
+
         self.lock_status = ttk.Label(self.lock_removal_frame, text="Pronto")
-        self.lock_status.grid(row=2, column=0, columnspan=2)
+        self.lock_status.grid(row=3, column=0, columnspan=2)
     
     def setup_log_tab(self):
         """Configura aba de logs"""
@@ -171,7 +193,7 @@ class SamsungUnlockGUI:
     
     def connect_device(self):
         """Conecta ao dispositivo em thread separada"""
-        def connect_thread():
+        def connect_thread(auto=False):
             try:
                 selected = self.devices_tree.selection()
                 selected_info = self.devices_tree.item(selected[0], "values")[0] if selected else None
@@ -180,12 +202,27 @@ class SamsungUnlockGUI:
                     model = info.get("model", self.device_model.get())
                     serial = info.get("serial", self.device_serial.get())
                     mode = info.get("connection_type", self.connection_mode.get())
+                    extra = {k: v for k, v in info.items() if k not in {"model", "serial", "connection_type"}}
                 else:
                     model = self.device_model.get()
                     serial = self.device_serial.get()
                     mode = self.connection_mode.get()
+                    extra = {}
 
-                if self.controller.connect(model, serial, mode):
+                self.connection_progress['value'] = 0
+                self.connection_status.config(text="Tentando conectar...")
+                success = self.controller.connect(model, serial, mode, extra=extra)
+                if not success and auto:
+                    self.connection_status.config(text="Aguardando dispositivo...")
+                    success = self.controller.wait_and_connect(
+                        model,
+                        serial,
+                        mode,
+                        extra=extra,
+                        progress_cb=lambda v: self.connection_progress.configure(value=v),
+                    )
+
+                if success:
                     identity = self.controller.fetch_identity()
                     if identity.get("model"):
                         self.device_model.delete(0, tk.END)
@@ -193,19 +230,22 @@ class SamsungUnlockGUI:
                     if identity.get("serial"):
                         self.device_serial.delete(0, tk.END)
                         self.device_serial.insert(0, identity.get("serial"))
+                    self.connection_progress['value'] = 100
                     self.connection_status.config(text="Conectado!")
-                    self._log_connection(f"Conexão ativa via {mode} - {serial or 'sem serial'}")
+                    self._log_connection(f"Conexão ativa via {mode} - {serial or identity.get('serial') or 'sem serial'}")
                     messagebox.showinfo("Sucesso", "Dispositivo conectado!")
                 else:
+                    self.connection_progress['value'] = 0
                     self.connection_status.config(text="Falha na conexão")
                     self._log_connection("Falha ao conectar dispositivo")
                     messagebox.showerror("Erro", "Falha na conexão")
             except Exception as e:
+                self.connection_progress['value'] = 0
                 self.connection_status.config(text=f"Erro: {str(e)}")
                 self._log_connection(f"Erro: {e}")
                 messagebox.showerror("Erro", str(e))
 
-        threading.Thread(target=connect_thread, daemon=True).start()
+        threading.Thread(target=connect_thread, kwargs={"auto": True}, daemon=True).start()
 
     def refresh_devices(self, auto: bool = False):
         devices = self.controller.discover_devices()
@@ -235,6 +275,17 @@ class SamsungUnlockGUI:
             if info.get("serial"):
                 self.device_serial.delete(0, tk.END)
                 self.device_serial.insert(0, info["serial"])
+            if self.auto_connect_var.get():
+                threading.Thread(
+                    target=lambda: self.controller.wait_and_connect(
+                        info.get("model", self.device_model.get()),
+                        info.get("serial", self.device_serial.get()),
+                        info.get("connection_type", self.connection_mode.get()),
+                        extra={k: v for k, v in info.items() if k not in {"model", "serial", "connection_type", "label"}},
+                        progress_cb=lambda v: self.connection_progress.configure(value=v),
+                    ),
+                    daemon=True,
+                ).start()
         for label in sorted(removed):
             self._log_connection(f"Removido: {label}")
 
@@ -265,18 +316,23 @@ class SamsungUnlockGUI:
         def remove_mdm_thread():
             try:
                 self.mdm_status.config(text="Removendo MDM...")
+                self.mdm_progress['value'] = 10
+                self._log_connection("MDM: início da rotina")
 
                 if self.controller.remove_mdm():
+                    self.mdm_progress['value'] = 100
                     self.mdm_status.config(text="MDM removido com sucesso!")
                     messagebox.showinfo("Sucesso", "MDM removido com sucesso!")
                 else:
+                    self.mdm_progress['value'] = 0
                     self.mdm_status.config(text="Falha ao remover MDM")
                     messagebox.showerror("Erro", "Falha ao remover MDM")
-                    
+
             except Exception as e:
+                self.mdm_progress['value'] = 0
                 self.mdm_status.config(text=f"Erro: {str(e)}")
                 messagebox.showerror("Erro", str(e))
-        
+
         threading.Thread(target=remove_mdm_thread, daemon=True).start()
     
     def bypass_kg_lock(self):
@@ -284,18 +340,23 @@ class SamsungUnlockGUI:
         def bypass_kg_thread():
             try:
                 self.kg_status.config(text="Executando bypass KG Lock...")
+                self.kg_progress['value'] = 20
+                self._log_connection("KG: preparando bypass")
 
                 if self.controller.bypass_kg():
+                    self.kg_progress['value'] = 100
                     self.kg_status.config(text="KG Lock bypassado com sucesso!")
                     messagebox.showinfo("Sucesso", "KG Lock bypassado com sucesso!")
                 else:
+                    self.kg_progress['value'] = 0
                     self.kg_status.config(text="Falha no bypass KG Lock")
                     messagebox.showerror("Erro", "Falha no bypass KG Lock")
-                    
+
             except Exception as e:
+                self.kg_progress['value'] = 0
                 self.kg_status.config(text=f"Erro: {str(e)}")
                 messagebox.showerror("Erro", str(e))
-        
+
         threading.Thread(target=bypass_kg_thread, daemon=True).start()
     
     def bypass_frp(self):
@@ -303,18 +364,23 @@ class SamsungUnlockGUI:
         def bypass_frp_thread():
             try:
                 self.frp_status.config(text="Executando bypass FRP...")
+                self.frp_progress['value'] = 25
+                self._log_connection("FRP: iniciando bypass")
 
                 if self.controller.bypass_frp():
+                    self.frp_progress['value'] = 100
                     self.frp_status.config(text="FRP bypassado com sucesso!")
                     messagebox.showinfo("Sucesso", "FRP bypassado com sucesso!")
                 else:
+                    self.frp_progress['value'] = 0
                     self.frp_status.config(text="Falha no bypass FRP")
                     messagebox.showerror("Erro", "Falha no bypass FRP")
-                    
+
             except Exception as e:
+                self.frp_progress['value'] = 0
                 self.frp_status.config(text=f"Erro: {str(e)}")
                 messagebox.showerror("Erro", str(e))
-        
+
         threading.Thread(target=bypass_frp_thread, daemon=True).start()
     
     def remove_lock(self):
@@ -322,16 +388,21 @@ class SamsungUnlockGUI:
         def remove_lock_thread():
             try:
                 self.lock_status.config(text="Removendo bloqueio...")
+                self.lock_progress['value'] = 30
+                self._log_connection("Tela: rotina de desbloqueio iniciada")
 
                 lock_type = self.lock_type.get()
                 if self.controller.remove_lock(lock_type):
+                    self.lock_progress['value'] = 100
                     self.lock_status.config(text="Bloqueio removido com sucesso!")
                     messagebox.showinfo("Sucesso", "Bloqueio removido com sucesso!")
                 else:
+                    self.lock_progress['value'] = 0
                     self.lock_status.config(text="Falha ao remover bloqueio")
                     messagebox.showerror("Erro", "Falha ao remover bloqueio")
-                    
+
             except Exception as e:
+                self.lock_progress['value'] = 0
                 self.lock_status.config(text=f"Erro: {str(e)}")
                 messagebox.showerror("Erro", str(e))
 

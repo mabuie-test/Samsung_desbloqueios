@@ -108,12 +108,20 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.device_serial.setPlaceholderText("Número de série/IMEI para perfis automáticos")
         form.addRow("Serial:", self.device_serial)
 
+        self.auto_connect = QtWidgets.QCheckBox("Auto conectar assim que plugado")
+        self.auto_connect.setChecked(True)
+        form.addRow(self.auto_connect)
+
         button_layout = QtWidgets.QHBoxLayout()
         self.connect_button = QtWidgets.QPushButton("Conectar")
         self.disconnect_button = QtWidgets.QPushButton("Desconectar")
         button_layout.addWidget(self.connect_button)
         button_layout.addWidget(self.disconnect_button)
         form.addRow(button_layout)
+
+        self.connection_progress = QtWidgets.QProgressBar()
+        self.connection_progress.setRange(0, 100)
+        form.addRow("Progresso:", self.connection_progress)
 
         self.connection_status = QtWidgets.QLabel("Desconectado")
         form.addRow("Status:", self.connection_status)
@@ -207,6 +215,10 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.mdm_button = QtWidgets.QPushButton("Remover MDM")
         layout.addWidget(self.mdm_button)
 
+        self.mdm_progress = QtWidgets.QProgressBar()
+        self.mdm_progress.setRange(0, 100)
+        layout.addWidget(self.mdm_progress)
+
         self.mdm_status = QtWidgets.QLabel("Pronto para remover MDM")
         self.mdm_status.setAlignment(QtCore.Qt.AlignCenter)
         layout.addWidget(self.mdm_status)
@@ -225,6 +237,10 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         self.kg_button = QtWidgets.QPushButton("Executar Bypass KG Lock")
         layout.addWidget(self.kg_button)
+
+        self.kg_progress = QtWidgets.QProgressBar()
+        self.kg_progress.setRange(0, 100)
+        layout.addWidget(self.kg_progress)
 
         self.kg_status = QtWidgets.QLabel("Pronto para bypass KG Lock")
         self.kg_status.setAlignment(QtCore.Qt.AlignCenter)
@@ -245,6 +261,10 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.frp_button = QtWidgets.QPushButton("Executar Bypass FRP")
         layout.addWidget(self.frp_button)
 
+        self.frp_progress = QtWidgets.QProgressBar()
+        self.frp_progress.setRange(0, 100)
+        layout.addWidget(self.frp_progress)
+
         self.frp_status = QtWidgets.QLabel("Pronto para bypass FRP")
         self.frp_status.setAlignment(QtCore.Qt.AlignCenter)
         layout.addWidget(self.frp_status)
@@ -263,6 +283,10 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         self.lock_button = QtWidgets.QPushButton("Remover Bloqueio")
         form.addRow(self.lock_button)
+
+        self.lock_progress = QtWidgets.QProgressBar()
+        self.lock_progress.setRange(0, 100)
+        form.addRow("Progresso:", self.lock_progress)
 
         self.lock_status = QtWidgets.QLabel("Pronto")
         form.addRow("Status:", self.lock_status)
@@ -311,22 +335,42 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                 model = info.get("model", self.device_model.text())
                 serial = info.get("serial", self.device_serial.text())
                 mode = info.get("connection_type", self.connection_mode.currentText())
+                extra = {k: v for k, v in info.items() if k not in {"model", "serial", "connection_type"}}
 
-                if self.controller.connect(model, serial, mode):
+                self._update_progress_bar(self.connection_progress, 10)
+                self._update_status(self.connection_status, "Tentando conectar...")
+
+                success = self.controller.connect(model, serial, mode, extra=extra)
+                if not success:
+                    self._update_status(self.connection_status, "Aguardando dispositivo...")
+                    success = self.controller.wait_and_connect(
+                        model,
+                        serial,
+                        mode,
+                        extra=extra,
+                        progress_cb=lambda v: self._update_progress_bar(self.connection_progress, v),
+                    )
+
+                if success:
                     identity = self.controller.fetch_identity()
                     if identity.get("model"):
                         self._update_line(self.device_model, identity.get("model"))
                     if identity.get("serial"):
                         self._update_line(self.device_serial, identity.get("serial"))
+                    self._update_progress_bar(self.connection_progress, 100)
                     self._update_status(self.connection_status, "Conectado!")
-                    self._append_connection_log(f"Conexão ativa via {mode} - {serial or 'sem serial'}")
+                    self._append_connection_log(
+                        f"Conexão ativa via {mode} - {serial or identity.get('serial') or 'sem serial'}"
+                    )
                     self._show_info("Sucesso", "Dispositivo conectado!")
                 else:
+                    self._update_progress_bar(self.connection_progress, 0)
                     self._update_status(self.connection_status, "Falha na conexão")
                     self._append_connection_log("Falha ao conectar dispositivo")
                     self._show_error("Erro", "Falha na conexão")
             except Exception as exc:  # pragma: no cover - defensive
                 logging.exception("Falha ao conectar dispositivo")
+                self._update_progress_bar(self.connection_progress, 0)
                 self._update_status(self.connection_status, f"Erro: {exc}")
                 self._append_connection_log(f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
@@ -359,6 +403,17 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                 self._update_line(self.device_model, display_model)
             if info.get("serial"):
                 self._update_line(self.device_serial, info.get("serial", ""))
+            if getattr(self, "auto_connect", None) and self.auto_connect.isChecked():
+                threading.Thread(
+                    target=lambda: self.controller.wait_and_connect(
+                        info.get("model", self.device_model.text()),
+                        info.get("serial", self.device_serial.text()),
+                        info.get("connection_type", self.connection_mode.currentText()),
+                        extra={k: v for k, v in info.items() if k not in {"model", "serial", "connection_type", "label"}},
+                        progress_cb=lambda v: self._update_progress_bar(self.connection_progress, v),
+                    ),
+                    daemon=True,
+                ).start()
         for label in sorted(removed):
             self._append_connection_log(f"Removido: {label}")
 
@@ -372,14 +427,19 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         def task():
             try:
                 self._update_status(self.mdm_status, "Removendo MDM...")
+                self._update_progress_bar(self.mdm_progress, 15)
+                self._append_connection_log("MDM: rotina iniciada")
                 if self.controller.remove_mdm():
+                    self._update_progress_bar(self.mdm_progress, 100)
                     self._update_status(self.mdm_status, "MDM removido com sucesso!")
                     self._show_info("Sucesso", "MDM removido com sucesso!")
                 else:
+                    self._update_progress_bar(self.mdm_progress, 0)
                     self._update_status(self.mdm_status, "Falha ao remover MDM")
                     self._show_error("Erro", "Falha ao remover MDM")
             except Exception as exc:  # pragma: no cover
                 logging.exception("Falha ao remover MDM")
+                self._update_progress_bar(self.mdm_progress, 0)
                 self._update_status(self.mdm_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
 
@@ -389,14 +449,19 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         def task():
             try:
                 self._update_status(self.kg_status, "Executando bypass KG Lock...")
+                self._update_progress_bar(self.kg_progress, 20)
+                self._append_connection_log("KG: preparando bypass")
                 if self.controller.bypass_kg():
+                    self._update_progress_bar(self.kg_progress, 100)
                     self._update_status(self.kg_status, "KG Lock bypassado com sucesso!")
                     self._show_info("Sucesso", "KG Lock bypassado com sucesso!")
                 else:
+                    self._update_progress_bar(self.kg_progress, 0)
                     self._update_status(self.kg_status, "Falha no bypass KG Lock")
                     self._show_error("Erro", "Falha no bypass KG Lock")
             except Exception as exc:  # pragma: no cover
                 logging.exception("Falha no bypass KG Lock")
+                self._update_progress_bar(self.kg_progress, 0)
                 self._update_status(self.kg_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
 
@@ -406,14 +471,19 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         def task():
             try:
                 self._update_status(self.frp_status, "Executando bypass FRP...")
+                self._update_progress_bar(self.frp_progress, 25)
+                self._append_connection_log("FRP: iniciando rotina")
                 if self.controller.bypass_frp():
+                    self._update_progress_bar(self.frp_progress, 100)
                     self._update_status(self.frp_status, "FRP bypassado com sucesso!")
                     self._show_info("Sucesso", "FRP bypassado com sucesso!")
                 else:
+                    self._update_progress_bar(self.frp_progress, 0)
                     self._update_status(self.frp_status, "Falha no bypass FRP")
                     self._show_error("Erro", "Falha no bypass FRP")
             except Exception as exc:  # pragma: no cover
                 logging.exception("Falha no bypass FRP")
+                self._update_progress_bar(self.frp_progress, 0)
                 self._update_status(self.frp_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
 
@@ -423,17 +493,22 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         def task():
             try:
                 self._update_status(self.lock_status, "Removendo bloqueio...")
+                self._update_progress_bar(self.lock_progress, 30)
+                self._append_connection_log("Tela: sequência de desbloqueio iniciada")
                 lock_type = self.lock_type.currentText()
                 if lock_type == "Automático":
                     lock_type = None
                 if self.controller.remove_lock(lock_type):
+                    self._update_progress_bar(self.lock_progress, 100)
                     self._update_status(self.lock_status, "Bloqueio removido com sucesso!")
                     self._show_info("Sucesso", "Bloqueio removido com sucesso!")
                 else:
+                    self._update_progress_bar(self.lock_progress, 0)
                     self._update_status(self.lock_status, "Falha ao remover bloqueio")
                     self._show_error("Erro", "Falha ao remover bloqueio")
             except Exception as exc:  # pragma: no cover
                 logging.exception("Falha na remoção de bloqueio")
+                self._update_progress_bar(self.lock_progress, 0)
                 self._update_status(self.lock_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
 
@@ -444,6 +519,9 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     def _update_status(self, label: QtWidgets.QLabel, message: str) -> None:
         QtCore.QMetaObject.invokeMethod(label, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, message))
+
+    def _update_progress_bar(self, bar: QtWidgets.QProgressBar, value: int) -> None:
+        QtCore.QMetaObject.invokeMethod(bar, "setValue", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(int, value))
 
     def _append_connection_log(self, message: str) -> None:
         if not hasattr(self, "connection_log"):

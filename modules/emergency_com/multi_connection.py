@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from typing import Dict, Iterable, List, Optional
 
@@ -82,6 +83,9 @@ class AdvancedADBConnection(ConnectionStrategy):
                 self.connected = True
                 return True
 
+            return False
+        except FileNotFoundError:
+            logging.debug("ADB não localizado durante tentativa de conexão")
             return False
         except Exception as exc:  # pragma: no cover - defensive
             logging.error("Falha na conexão ADB: %s", exc)
@@ -480,6 +484,48 @@ class ConnectionHandler:
                 logging.info("Conexão estabelecida via %s", name)
                 return True
         logging.error("Todas as estratégias de conexão falharam")
+        return False
+
+    def wait_and_connect(
+        self,
+        device_template: Dict,
+        *,
+        max_wait: float = 35.0,
+        poll_interval: float = 2.0,
+        progress_cb=None,
+    ) -> bool:
+        """Aguarda um dispositivo aparecer e tenta conexão assim que detectado.
+
+        Útil para fluxos onde o usuário coloca o aparelho em modo desejado após
+        iniciar o processo. Opcionalmente, emite progresso para a UI.
+        """
+
+        waited = 0.0
+        while waited <= max_wait:
+            devices = self.discover_devices()
+            # Encontra o primeiro que combine com o tipo solicitado ou pega o primeiro disponível
+            match = None
+            for dev in devices:
+                if device_template.get("connection_type") and dev.get("connection_type", "").lower() == device_template[
+                    "connection_type"
+                ].lower():
+                    match = dev
+                    break
+            if not match and devices:
+                match = devices[0]
+
+            if match:
+                merged = {**match, **device_template}
+                if progress_cb:
+                    progress_cb(min(95, int((waited / max_wait) * 100)))
+                if self.establish_connection(merged):
+                    if progress_cb:
+                        progress_cb(100)
+                    return True
+            waited += poll_interval
+            if progress_cb:
+                progress_cb(min(90, int((waited / max_wait) * 100)))
+            time.sleep(poll_interval)
         return False
 
     def is_connected(self) -> bool:

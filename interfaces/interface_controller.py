@@ -22,14 +22,27 @@ class InterfaceController:
     # ------------------------------------------------------------------
     # Conexão
     # ------------------------------------------------------------------
-    def connect(self, model: str, serial: str, connection_type: str, prefer_edl: bool = False) -> bool:
+    def connect(self, model: str, serial: str, connection_type: str, prefer_edl: bool = False, extra: Optional[dict] = None) -> bool:
         device_info = {
             "model": model,
             "serial": serial,
             "connection_type": connection_type,
         }
+        if extra:
+            device_info.update(extra)
         logging.debug("Solicitação de conexão via interface: %s", device_info)
         return self.core.connection_handler.establish_connection(device_info, prefer_edl=prefer_edl)
+
+    def wait_and_connect(self, model: str, serial: str, connection_type: str, *, prefer_edl: bool = False, extra: Optional[dict] = None, progress_cb=None) -> bool:
+        device_info = {
+            "model": model,
+            "serial": serial,
+            "connection_type": connection_type,
+        }
+        if extra:
+            device_info.update(extra)
+        logging.debug("Aguardando conexão automática: %s", device_info)
+        return self.core.connection_handler.wait_and_connect(device_info, prefer_edl=prefer_edl, progress_cb=progress_cb)
 
     def discover_devices(self):
         return self.core.connection_handler._handler.discover_devices()

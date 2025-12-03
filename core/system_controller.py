@@ -320,6 +320,16 @@ class AdvancedConnectionHandler:
             return True
         return False
 
+    def wait_and_connect(self, device_info: Dict[str, str], *, prefer_edl: bool = False, progress_cb=None) -> bool:
+        profile = self._matrix.identify(device_info)
+        order = self._operations.connection_sequence(profile)
+        if prefer_edl and "edl" in order:
+            order = ["edl"] + [step for step in order if step != "edl"]
+        if self._handler.wait_and_connect(device_info, progress_cb=progress_cb):
+            self.device_profile = profile
+            return True
+        return False
+
     def is_connected(self) -> bool:
         return self._handler.is_connected()
 
