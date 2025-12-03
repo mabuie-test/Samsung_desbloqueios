@@ -7,6 +7,7 @@ Versão Completa com Todas as Funcionalidades
 import logging
 import sys
 import os
+import ctypes
 from interfaces.gui_interface import SamsungUnlockGUI
 import tkinter as tk
 
@@ -25,10 +26,21 @@ def main():
     """Função principal da aplicação"""
     print("Samsung Unlock Pro - Inicializando...")
     setup_logging()
-    
+
     # Verificar se é root (para algumas operações)
-    if os.geteuid() != 0:
-        print("Algumas funcionalidades podem requerer privilégios de root")
+    try:
+        is_admin = False
+        if hasattr(os, "geteuid"):
+            is_admin = os.geteuid() == 0
+        elif os.name == "nt":
+            # Windows: testar privilégios administrativos
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+        if not is_admin:
+            print("Algumas funcionalidades podem requerer privilégios elevados")
+    except Exception:
+        # Se a detecção falhar, apenas avisar sem interromper a inicialização
+        print("Não foi possível verificar privilégios elevados; continue com cautela")
     
     # Inicializar o sistema
     try:
