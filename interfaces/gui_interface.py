@@ -182,11 +182,22 @@ class SamsungUnlockGUI:
         ttk.Button(self.lock_removal_frame, text="Hard reset (multi-estratégia)",
                   command=self.hard_reset).grid(row=2, column=0, columnspan=2, pady=(4, 2))
 
+        ttk.Button(self.lock_removal_frame, text="Hard reset Qualcomm",
+                  command=lambda: self.hard_reset_chipset("qualcomm")).grid(row=3, column=0, pady=2, sticky="ew")
+        ttk.Button(self.lock_removal_frame, text="Hard reset MTK",
+                  command=lambda: self.hard_reset_chipset("mtk")).grid(row=3, column=1, pady=2, sticky="ew")
+        ttk.Button(self.lock_removal_frame, text="Hard reset Exynos",
+                  command=lambda: self.hard_reset_chipset("exynos")).grid(row=4, column=0, pady=2, sticky="ew")
+        ttk.Button(self.lock_removal_frame, text="Hard reset Unisoc/SPD",
+                  command=lambda: self.hard_reset_chipset("unisoc")).grid(row=4, column=1, pady=2, sticky="ew")
+        ttk.Button(self.lock_removal_frame, text="Reset controlado (sem wipe)",
+                  command=self.controlled_reset).grid(row=5, column=0, columnspan=2, pady=(4, 2), sticky="ew")
+
         self.lock_progress = ttk.Progressbar(self.lock_removal_frame, mode="determinate", length=250)
-        self.lock_progress.grid(row=3, column=0, columnspan=2, padx=5, pady=5)
+        self.lock_progress.grid(row=6, column=0, columnspan=2, padx=5, pady=5)
 
         self.lock_status = ttk.Label(self.lock_removal_frame, text="Pronto")
-        self.lock_status.grid(row=4, column=0, columnspan=2)
+        self.lock_status.grid(row=7, column=0, columnspan=2)
     
     def setup_log_tab(self):
         """Configura aba de logs"""
@@ -451,6 +462,46 @@ class SamsungUnlockGUI:
                 messagebox.showerror("Erro", str(exc))
 
         threading.Thread(target=hard_reset_thread, daemon=True).start()
+
+    def hard_reset_chipset(self, chipset: str):
+        def hard_reset_chip_thread():
+            try:
+                self.lock_status.config(text=f"Hard reset dirigido ({chipset})...")
+                self.lock_progress['value'] = 30
+                if self.controller.hard_reset_chipset(chipset):
+                    self.lock_progress['value'] = 100
+                    self.lock_status.config(text=f"Hard reset {chipset} concluído")
+                    messagebox.showinfo("Sucesso", f"Hard reset ({chipset}) executado.")
+                else:
+                    self.lock_progress['value'] = 0
+                    self.lock_status.config(text="Falha no hard reset dirigido")
+                    messagebox.showerror("Erro", "Hard reset dirigido falhou")
+            except Exception as exc:
+                self.lock_progress['value'] = 0
+                self.lock_status.config(text=f"Erro: {exc}")
+                messagebox.showerror("Erro", str(exc))
+
+        threading.Thread(target=hard_reset_chip_thread, daemon=True).start()
+
+    def controlled_reset(self):
+        def controlled_reset_thread():
+            try:
+                self.lock_status.config(text="Reset controlado em andamento...")
+                self.lock_progress['value'] = 25
+                if self.controller.controlled_reset():
+                    self.lock_progress['value'] = 100
+                    self.lock_status.config(text="Reset controlado concluído")
+                    messagebox.showinfo("Sucesso", "Senha removida sem wipe.")
+                else:
+                    self.lock_progress['value'] = 0
+                    self.lock_status.config(text="Falha no reset controlado")
+                    messagebox.showerror("Erro", "Reset controlado falhou")
+            except Exception as exc:
+                self.lock_progress['value'] = 0
+                self.lock_status.config(text=f"Erro: {exc}")
+                messagebox.showerror("Erro", str(exc))
+
+        threading.Thread(target=controlled_reset_thread, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Firmware

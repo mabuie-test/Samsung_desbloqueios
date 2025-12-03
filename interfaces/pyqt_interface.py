@@ -294,6 +294,23 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         form.addRow(self.lock_button)
         form.addRow(self.hardreset_button)
 
+        chipset_row1 = QtWidgets.QHBoxLayout()
+        self.hardreset_qc_button = QtWidgets.QPushButton("Hard reset Qualcomm")
+        self.hardreset_mtk_button = QtWidgets.QPushButton("Hard reset MTK")
+        chipset_row1.addWidget(self.hardreset_qc_button)
+        chipset_row1.addWidget(self.hardreset_mtk_button)
+        form.addRow(chipset_row1)
+
+        chipset_row2 = QtWidgets.QHBoxLayout()
+        self.hardreset_exynos_button = QtWidgets.QPushButton("Hard reset Exynos")
+        self.hardreset_unisoc_button = QtWidgets.QPushButton("Hard reset Unisoc/SPD")
+        chipset_row2.addWidget(self.hardreset_exynos_button)
+        chipset_row2.addWidget(self.hardreset_unisoc_button)
+        form.addRow(chipset_row2)
+
+        self.controlled_reset_button = QtWidgets.QPushButton("Reset controlado (sem wipe)")
+        form.addRow(self.controlled_reset_button)
+
         self.lock_progress = QtWidgets.QProgressBar()
         self.lock_progress.setRange(0, 100)
         form.addRow("Progresso:", self.lock_progress)
@@ -303,6 +320,11 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         self.lock_button.clicked.connect(self._remove_lock)
         self.hardreset_button.clicked.connect(self._hard_reset)
+        self.hardreset_qc_button.clicked.connect(lambda: self._hard_reset_chipset("qualcomm"))
+        self.hardreset_mtk_button.clicked.connect(lambda: self._hard_reset_chipset("mtk"))
+        self.hardreset_exynos_button.clicked.connect(lambda: self._hard_reset_chipset("exynos"))
+        self.hardreset_unisoc_button.clicked.connect(lambda: self._hard_reset_chipset("unisoc"))
+        self.controlled_reset_button.clicked.connect(self._controlled_reset)
 
         self.tab_widget.addTab(widget, "Remoção de Bloqueio")
 
@@ -553,6 +575,48 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                     self._show_error("Erro", "Hard reset falhou")
             except Exception as exc:
                 logging.exception("Hard reset falhou")
+                self._update_progress_bar(self.lock_progress, 0)
+                self._update_status(self.lock_status, f"Erro: {exc}")
+                self._show_error("Erro", str(exc))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _hard_reset_chipset(self, chipset: str) -> None:
+        def task():
+            try:
+                self._update_status(self.lock_status, f"Hard reset dirigido ({chipset})...")
+                self._update_progress_bar(self.lock_progress, 35)
+                if self.controller.hard_reset_chipset(chipset):
+                    self._update_progress_bar(self.lock_progress, 100)
+                    self._update_status(self.lock_status, f"Hard reset {chipset} concluído")
+                    self._show_info("Sucesso", f"Hard reset ({chipset}) executado")
+                else:
+                    self._update_progress_bar(self.lock_progress, 0)
+                    self._update_status(self.lock_status, "Hard reset dirigido falhou")
+                    self._show_error("Erro", "Hard reset dirigido falhou")
+            except Exception as exc:
+                logging.exception("Hard reset dirigido falhou")
+                self._update_progress_bar(self.lock_progress, 0)
+                self._update_status(self.lock_status, f"Erro: {exc}")
+                self._show_error("Erro", str(exc))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _controlled_reset(self) -> None:
+        def task():
+            try:
+                self._update_status(self.lock_status, "Reset controlado em andamento...")
+                self._update_progress_bar(self.lock_progress, 25)
+                if self.controller.controlled_reset():
+                    self._update_progress_bar(self.lock_progress, 100)
+                    self._update_status(self.lock_status, "Reset controlado concluído")
+                    self._show_info("Sucesso", "Senha removida sem wipe")
+                else:
+                    self._update_progress_bar(self.lock_progress, 0)
+                    self._update_status(self.lock_status, "Reset controlado falhou")
+                    self._show_error("Erro", "Reset controlado falhou")
+            except Exception as exc:
+                logging.exception("Reset controlado falhou")
                 self._update_progress_bar(self.lock_progress, 0)
                 self._update_status(self.lock_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))

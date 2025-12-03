@@ -12,6 +12,7 @@ import serial
 from serial.tools import list_ports
 import usb.core
 import usb.util
+from usb.core import NoBackendError
 
 
 _VENDOR_BRANDS = {
@@ -468,6 +469,10 @@ class ConnectionHandler:
         }
         self.current_strategy: Optional[ConnectionStrategy] = None
         self.current_name: Optional[str] = None
+        self._last_discovered: List[Dict[str, str]] = []
+        self._last_connected_identity: Dict[str, str] = {}
+        self._usb_backend_available: bool = True
+        self._warned_usb_backend: bool = False
 
     def establish_connection(self, device_info: Dict, order: Optional[Iterable[str]] = None) -> bool:
         preferred = (device_info.get("connection_type") or "").lower()
@@ -481,6 +486,7 @@ class ConnectionHandler:
             if strategy.connect(device_info):
                 self.current_strategy = strategy
                 self.current_name = name
+                self._last_connected_identity = self._merge_identity(device_info)
                 logging.info("Conexão estabelecida via %s", name)
                 return True
         logging.error("Todas as estratégias de conexão falharam")
@@ -616,71 +622,100 @@ class ConnectionHandler:
             logging.debug("Falha ao listar portas seriais")
 
         # USB based detection (MTP/Odin/MTK/Qualcomm)
-        try:
-            for dev in usb.core.find(find_all=True):
-                vendor_id = f"{dev.idVendor:04x}"
-                product_id = f"{dev.idProduct:04x}"
-                bus = getattr(dev, "bus", None)
-                port_numbers = getattr(dev, "port_numbers", None)
-                port_path = "-".join(str(p) for p in port_numbers) if port_numbers else ""
-                port_hint = f" @bus{bus}:{port_path}" if bus or port_path else ""
-                brand = _VENDOR_BRANDS.get(vendor_id, "")
-                manufacturer = _safe_usb_string(dev, dev.iManufacturer)
-                product = _safe_usb_string(dev, dev.iProduct)
-                serial = _safe_usb_string(dev, dev.iSerialNumber)
-                readable_name = next(filter(None, [product, manufacturer, brand]), "")
-                label = " ".join(filter(None, [readable_name, f"({vendor_id}:{product_id}{port_hint})"])) or f"USB {vendor_id}:{product_id}{port_hint}"
-                connection_type = "usb_raw"
-                if vendor_id == "04e8":
-                    connection_type = "odin"
-                    label = f"Odin/Download - {label}"
-                elif any(intf.bInterfaceClass == 6 for cfg in dev for intf in cfg):
-                    connection_type = "mtp"
-                    label = f"MTP - {label}"
-                devices.append(
-                    {
-                        "connection_type": connection_type,
-                        "vendor_id": vendor_id,
-                        "product_id": product_id,
-                        "brand": brand or manufacturer,
-                        "model": readable_name,
-                        "serial": serial,
-                        "label": label,
-                    }
-                )
-        except Exception:
-            logging.debug("Falha ao enumerar dispositivos USB")
+        if self._usb_backend_available:
+            try:
+                for dev in usb.core.find(find_all=True):
+                    vendor_id = f"{dev.idVendor:04x}"
+                    product_id = f"{dev.idProduct:04x}"
+                    bus = getattr(dev, "bus", None)
+                    port_numbers = getattr(dev, "port_numbers", None)
+                    port_path = "-".join(str(p) for p in port_numbers) if port_numbers else ""
+                    port_hint = f" @bus{bus}:{port_path}" if bus or port_path else ""
+                    brand = _VENDOR_BRANDS.get(vendor_id, "")
+                    manufacturer = _safe_usb_string(dev, dev.iManufacturer)
+                    product = _safe_usb_string(dev, dev.iProduct)
+                    serial = _safe_usb_string(dev, dev.iSerialNumber)
+                    readable_name = next(filter(None, [product, manufacturer, brand]), "")
+                    label = " ".join(filter(None, [readable_name, f"({vendor_id}:{product_id}{port_hint})"])) or f"USB {vendor_id}:{product_id}{port_hint}"
+                    connection_type = "usb_raw"
+                    if vendor_id == "04e8":
+                        connection_type = "odin"
+                        label = f"Odin/Download - {label}"
+                    elif any(intf.bInterfaceClass == 6 for cfg in dev for intf in cfg):
+                        connection_type = "mtp"
+                        label = f"MTP - {label}"
+                    devices.append(
+                        {
+                            "connection_type": connection_type,
+                            "vendor_id": vendor_id,
+                            "product_id": product_id,
+                            "brand": brand or manufacturer,
+                            "model": readable_name,
+                            "serial": serial,
+                            "label": label,
+                        }
+                    )
+            except NoBackendError:
+                self._usb_backend_available = False
+                if not self._warned_usb_backend:
+                    logging.warning("Backend USB ausente ou libusb não instalada; detecção USB limitada")
+                    self._warned_usb_backend = True
+            except Exception:
+                logging.debug("Falha ao enumerar dispositivos USB")
+
+        self._last_discovered = devices
 
         return devices
 
     def read_identity(self) -> Dict[str, str]:
         """Tenta obter modelo/serial automaticamente da estratégia ativa."""
         if not self.current_strategy:
-            return {}
+            return dict(self._last_connected_identity)
         if self.current_name == "adb":
             try:
                 serial = subprocess.run(["adb", "get-serialno"], capture_output=True, text=True, timeout=5).stdout.strip()
                 model = subprocess.run(
                     ["adb", "shell", "getprop", "ro.product.model"], capture_output=True, text=True, timeout=5
                 ).stdout.strip()
-                return {"serial": serial, "model": model}
+                brand = subprocess.run(
+                    ["adb", "shell", "getprop", "ro.product.brand"], capture_output=True, text=True, timeout=5
+                ).stdout.strip()
+                return {"serial": serial, "model": model, "brand": brand}
             except Exception:
-                return {}
+                return dict(self._last_connected_identity)
         if self.current_name == "fastboot":
             try:
-                model = subprocess.run(
+                product_out = subprocess.run(
                     ["fastboot", "getvar", "product"], capture_output=True, text=True, timeout=5
                 ).stdout.strip()
-                return {"serial": "", "model": model}
+                serial_out = subprocess.run(
+                    ["fastboot", "getvar", "serialno"], capture_output=True, text=True, timeout=5
+                ).stdout.strip()
+                model = product_out.split("product:")[-1].strip() if "product:" in product_out else product_out
+                serial = serial_out.split("serialno:")[-1].strip() if "serialno:" in serial_out else serial_out
+                return {"serial": serial, "model": model}
             except Exception:
-                return {}
+                return dict(self._last_connected_identity)
         if self.current_name in {"odin", "mtp"}:
-            try:
-                return {
-                    "serial": "",
-                    "model": "Samsung (Download/MTP)",
-                }
-            except Exception:
-                return {}
-        return {}
+            return dict(self._last_connected_identity) or {"serial": "", "model": "Samsung (Download/MTP)"}
+        return dict(self._last_connected_identity)
+
+    def _merge_identity(self, device_info: Dict[str, str]) -> Dict[str, str]:
+        """Mescla dados capturados durante descoberta para enriquecer identidade."""
+        base = {k: v for k, v in device_info.items() if v}
+        match = None
+        serial = device_info.get("serial")
+        vendor = device_info.get("vendor_id")
+        product = device_info.get("product_id")
+        for dev in self._last_discovered:
+            if serial and dev.get("serial") == serial:
+                match = dev
+                break
+            if vendor and product and dev.get("vendor_id") == vendor and dev.get("product_id") == product:
+                match = dev
+                break
+        if match:
+            for key in ("brand", "model", "serial", "connection_type"):
+                base.setdefault(key, match.get(key, ""))
+        return base
 

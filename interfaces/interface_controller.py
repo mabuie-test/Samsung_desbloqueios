@@ -74,6 +74,12 @@ class InterfaceController:
     def hard_reset(self) -> bool:
         return self.core.hard_reset_device()
 
+    def hard_reset_chipset(self, chipset: str) -> bool:
+        return self.core.hard_reset_by_chipset(chipset)
+
+    def controlled_reset(self) -> bool:
+        return self.core.controlled_reset()
+
     # ------------------------------------------------------------------
     # Firmware
     # ------------------------------------------------------------------

@@ -207,6 +207,20 @@ class SamsungUnlockCore:
             logging.error("Falha ao executar hard reset: %s", exc)
             return False
 
+    def hard_reset_by_chipset(self, chipset: str) -> bool:
+        try:
+            return self.lock_remover.hard_reset_chipset(chipset)
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha ao executar hard reset dirigido: %s", exc)
+            return False
+
+    def controlled_reset(self) -> bool:
+        try:
+            return self.lock_remover.controlled_reset()
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha ao executar reset controlado: %s", exc)
+            return False
+
     def force_routing_and_remount(self):
         """Forçar roteamento e remontagem de partições do sistema"""
         try:
@@ -324,7 +338,9 @@ class AdvancedConnectionHandler:
         if prefer_edl and "edl" in order:
             order = ["edl"] + [step for step in order if step != "edl"]
         if self._handler.establish_connection(device_info, order):
-            self.device_profile = profile
+            identity = self._handler.read_identity()
+            enriched = {**device_info, **(identity or {})}
+            self.device_profile = self._matrix.identify(enriched)
             return True
         return False
 
@@ -334,7 +350,9 @@ class AdvancedConnectionHandler:
         if prefer_edl and "edl" in order:
             order = ["edl"] + [step for step in order if step != "edl"]
         if self._handler.wait_and_connect(device_info, progress_cb=progress_cb):
-            self.device_profile = profile
+            identity = self._handler.read_identity()
+            enriched = {**device_info, **(identity or {})}
+            self.device_profile = self._matrix.identify(enriched)
             return True
         return False
 
@@ -779,4 +797,18 @@ class LockScreenRemovalOrchestrator:
             return False
         remover = ModuleLockScreenRemover(self.connection_handler.current_strategy)
         return remover.hard_reset_device()
+
+    def hard_reset_chipset(self, chipset: str) -> bool:
+        if not self.connection_handler.is_connected():
+            logging.error("Dispositivo não conectado")
+            return False
+        remover = ModuleLockScreenRemover(self.connection_handler.current_strategy)
+        return remover.hard_reset_chipset(chipset)
+
+    def controlled_reset(self) -> bool:
+        if not self.connection_handler.is_connected():
+            logging.error("Dispositivo não conectado")
+            return False
+        remover = ModuleLockScreenRemover(self.connection_handler.current_strategy)
+        return remover.controlled_reset()
 
