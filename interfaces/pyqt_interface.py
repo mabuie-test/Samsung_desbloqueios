@@ -354,8 +354,9 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         for label in sorted(added):
             self._append_connection_log(f"Detectado: {label}")
             info = new_map[label]
-            if info.get("model"):
-                self._update_line(self.device_model, info.get("model", ""))
+            display_model = info.get("model") or info.get("brand")
+            if display_model:
+                self._update_line(self.device_model, display_model)
             if info.get("serial"):
                 self._update_line(self.device_serial, info.get("serial", ""))
         for label in sorted(removed):

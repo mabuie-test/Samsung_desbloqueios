@@ -228,9 +228,10 @@ class SamsungUnlockGUI:
         for label in sorted(added):
             self._log_connection(f"Detectado: {label}")
             info = new_map[label]
-            if info.get("model"):
+            display_model = info.get("model") or info.get("brand")
+            if display_model:
                 self.device_model.delete(0, tk.END)
-                self.device_model.insert(0, info["model"])
+                self.device_model.insert(0, display_model)
             if info.get("serial"):
                 self.device_serial.delete(0, tk.END)
                 self.device_serial.insert(0, info["serial"])

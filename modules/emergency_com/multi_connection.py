@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from typing import Dict, Iterable, List, Optional
@@ -10,6 +11,29 @@ import serial
 from serial.tools import list_ports
 import usb.core
 import usb.util
+
+
+_VENDOR_BRANDS = {
+    "04e8": "Samsung",
+    "18d1": "Google / Pixel",
+    "0e8d": "MediaTek",
+    "22d9": "MediaTek",
+    "05c6": "Qualcomm",
+    "1782": "Spreadtrum",
+    "1ebf": "Unisoc",
+}
+
+
+def _binary_available(binary: str) -> bool:
+    """Check if a required binary is available in PATH."""
+    return shutil.which(binary) is not None
+
+
+def _safe_usb_string(device: usb.core.Device, index: int) -> str:
+    try:
+        return usb.util.get_string(device, index) or ""
+    except Exception:
+        return ""
 
 
 class ConnectionStrategy(ABC):
@@ -37,6 +61,9 @@ class AdvancedADBConnection(ConnectionStrategy):
         self.device_id: Optional[str] = None
 
     def connect(self, device_info: Dict) -> bool:
+        if not _binary_available("adb"):
+            logging.debug("ADB não encontrado no PATH; ignorando tentativa de conexão ADB")
+            return False
         try:
             result = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=10)
             if device_info.get("serial") and device_info["serial"] in result.stdout:
@@ -246,6 +273,9 @@ class SerialConnection(ConnectionStrategy):
 
 class FastbootConnection(ConnectionStrategy):
     def connect(self, device_info: Dict) -> bool:
+        if not _binary_available("fastboot"):
+            logging.debug("Fastboot não encontrado no PATH; ignorando tentativa de conexão fastboot")
+            return False
         try:
             result = subprocess.run(["fastboot", "devices"], capture_output=True, text=True, timeout=10)
             serial = device_info.get("serial")
@@ -283,6 +313,8 @@ class OdinDownloadConnection(ConnectionStrategy):
         try:
             vendor = device_info.get("vendor_id", "").lower()
             self.connected = vendor == "04e8"
+            if self.connected:
+                self._clear_download_password()
             return self.connected
         except Exception:
             self.connected = False
@@ -306,6 +338,13 @@ class OdinDownloadConnection(ConnectionStrategy):
             return True
         except Exception:
             return False
+
+    def _clear_download_password(self) -> None:
+        """Tenta remover qualquer senha de proteção em modo download."""
+        if not _binary_available("heimdall"):
+            logging.debug("Heimdall não encontrado; não é possível limpar senha em modo Odin")
+            return
+        subprocess.run(["heimdall", "oem", "unlock"], timeout=20, check=False)
 
 
 class MTPConnection(ConnectionStrategy):
@@ -427,10 +466,13 @@ class ConnectionHandler:
         self.current_name: Optional[str] = None
 
     def establish_connection(self, device_info: Dict, order: Optional[Iterable[str]] = None) -> bool:
+        preferred = (device_info.get("connection_type") or "").lower()
         connection_order = list(order or ["adb", "mtp", "odin", "usb_raw", "serial", "edl", "fastboot"])
+        if preferred and preferred in connection_order:
+            connection_order = [preferred] + [n for n in connection_order if n != preferred]
         for name in connection_order:
             strategy = self.strategies.get(name)
-            if not strategy:
+            if not strategy or not self._strategy_available(name):
                 continue
             if strategy.connect(device_info):
                 self.current_strategy = strategy
@@ -448,6 +490,15 @@ class ConnectionHandler:
             raise ConnectionError("Nenhuma estratégia de conexão ativa")
         return self.current_strategy.send_command(command)
 
+    def _strategy_available(self, name: str) -> bool:
+        if name == "adb":
+            return _binary_available("adb")
+        if name == "fastboot":
+            return _binary_available("fastboot")
+        if name == "odin":
+            return True
+        return True
+
     def emergency_recover(self) -> bool:
         if not self.current_strategy:
             return False
@@ -458,42 +509,50 @@ class ConnectionHandler:
         devices: List[Dict[str, str]] = []
 
         # ADB
-        try:
-            result = subprocess.run(["adb", "devices", "-l"], capture_output=True, text=True, timeout=5)
-            for line in result.stdout.splitlines():
-                if not line or "List of devices" in line or "offline" in line:
-                    continue
-                parts = line.split()
-                if not parts:
-                    continue
-                serial = parts[0]
-                model = next((p.split(":", 1)[1] for p in parts if p.startswith("model:")), "")
-                devices.append(
-                    {
-                        "connection_type": "adb",
-                        "serial": serial,
-                        "model": model,
-                        "label": f"ADB - {serial} {model}".strip(),
-                    }
-                )
-        except Exception:
+        if _binary_available("adb"):
+            try:
+                result = subprocess.run(["adb", "devices", "-l"], capture_output=True, text=True, timeout=5)
+                for line in result.stdout.splitlines():
+                    if not line or "List of devices" in line or "offline" in line:
+                        continue
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    serial = parts[0]
+                    model = next((p.split(":", 1)[1] for p in parts if p.startswith("model:")), "")
+                    brand = next((p.split(":", 1)[1] for p in parts if p.startswith("device:")), "")
+                    devices.append(
+                        {
+                            "connection_type": "adb",
+                            "serial": serial,
+                            "model": model,
+                            "brand": brand,
+                            "label": " ".join(filter(None, ["ADB", serial, model])).strip(),
+                        }
+                    )
+            except Exception:
+                logging.debug("ADB indisponível durante descoberta")
+        else:
             logging.debug("ADB indisponível durante descoberta")
 
         # Fastboot
-        try:
-            result = subprocess.run(["fastboot", "devices"], capture_output=True, text=True, timeout=5)
-            for line in result.stdout.splitlines():
-                if not line.strip():
-                    continue
-                serial = line.split()[0]
-                devices.append(
-                    {
-                        "connection_type": "fastboot",
-                        "serial": serial,
-                        "label": f"Fastboot - {serial}",
-                    }
-                )
-        except Exception:
+        if _binary_available("fastboot"):
+            try:
+                result = subprocess.run(["fastboot", "devices"], capture_output=True, text=True, timeout=5)
+                for line in result.stdout.splitlines():
+                    if not line.strip():
+                        continue
+                    serial = line.split()[0]
+                    devices.append(
+                        {
+                            "connection_type": "fastboot",
+                            "serial": serial,
+                            "label": f"Fastboot - {serial}",
+                        }
+                    )
+            except Exception:
+                logging.debug("Fastboot indisponível durante descoberta")
+        else:
             logging.debug("Fastboot indisponível durante descoberta")
 
         # Serial/EDL enumerations
@@ -519,7 +578,12 @@ class ConnectionHandler:
                 port_numbers = getattr(dev, "port_numbers", None)
                 port_path = "-".join(str(p) for p in port_numbers) if port_numbers else ""
                 port_hint = f" @bus{bus}:{port_path}" if bus or port_path else ""
-                label = f"USB {vendor_id}:{product_id}{port_hint}".strip()
+                brand = _VENDOR_BRANDS.get(vendor_id, "")
+                manufacturer = _safe_usb_string(dev, dev.iManufacturer)
+                product = _safe_usb_string(dev, dev.iProduct)
+                serial = _safe_usb_string(dev, dev.iSerialNumber)
+                readable_name = next(filter(None, [product, manufacturer, brand]), "")
+                label = " ".join(filter(None, [readable_name, f"({vendor_id}:{product_id}{port_hint})"])) or f"USB {vendor_id}:{product_id}{port_hint}"
                 connection_type = "usb_raw"
                 if vendor_id == "04e8":
                     connection_type = "odin"
@@ -532,6 +596,9 @@ class ConnectionHandler:
                         "connection_type": connection_type,
                         "vendor_id": vendor_id,
                         "product_id": product_id,
+                        "brand": brand or manufacturer,
+                        "model": readable_name,
+                        "serial": serial,
                         "label": label,
                     }
                 )
