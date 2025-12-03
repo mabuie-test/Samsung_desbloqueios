@@ -151,6 +151,30 @@ class ChipsetOperations:
             return ("prodnv", "persist", "frp")
         return ("persist", "frp")
 
+    def frp_reset_commands(self, profile: ChipsetProfile) -> List[str]:
+        """Return FRP reset commands suited for each vendor/stack."""
+        commands: List[str] = [
+            "settings put global device_provisioned 1",
+            "settings put secure user_setup_complete 1",
+            "content delete --uri content://settings/secure --where \"name='user_setup_complete'\"",
+            "pm clear com.google.android.gms",
+            "pm clear com.google.android.gsf",
+            "pm clear com.google.android.gsf.login",
+        ]
+
+        vendor_partitions = {
+            "Samsung Exynos": ["/dev/block/by-name/frp", "/dev/block/by-name/persistent"],
+            "Qualcomm Snapdragon": ["/dev/block/by-name/frp", "/dev/block/bootdevice/by-name/frp"],
+            "MediaTek (MTK)": ["/dev/block/platform/bootdevice/by-name/frp", "/dev/block/by-name/seccfg"],
+            "Spreadtrum / Unisoc": ["/dev/block/by-name/frp", "/dev/block/by-name/prodnv"],
+            "Generic Android": ["/dev/block/by-name/frp"],
+        }
+
+        partitions = vendor_partitions.get(profile.name, vendor_partitions["Generic Android"])
+        for part in partitions:
+            commands.append(f"if [ -e {part} ]; then dd if=/dev/zero of={part} bs=4096 count=16; fi")
+        return commands
+
     def test_point_guides(self, profile: ChipsetProfile) -> List[str]:
         """Simple guidance strings for test-point orientated fluxos."""
         guides = {

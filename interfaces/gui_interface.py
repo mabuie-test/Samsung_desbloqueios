@@ -95,15 +95,22 @@ class SamsungUnlockGUI:
         ttk.Button(self.connection_frame, text="Desconectar",
                   command=self.disconnect_device).grid(row=5, column=1)
 
+        ttk.Button(self.connection_frame, text="Obter informações",
+                  command=self.show_device_information).grid(row=5, column=2)
+
+        ttk.Label(self.connection_frame, text="Informações do dispositivo:").grid(row=6, column=0, sticky="w")
+        self.device_info_box = scrolledtext.ScrolledText(self.connection_frame, width=60, height=4, state="disabled")
+        self.device_info_box.grid(row=7, column=0, columnspan=3, padx=5, pady=4, sticky="nsew")
+
         self.connection_progress = ttk.Progressbar(self.connection_frame, mode="determinate", length=280)
-        self.connection_progress.grid(row=6, column=0, columnspan=2, pady=(6, 2), sticky="w")
+        self.connection_progress.grid(row=8, column=0, columnspan=2, pady=(6, 2), sticky="w")
 
         self.connection_status = ttk.Label(self.connection_frame, text="Desconectado")
-        self.connection_status.grid(row=7, column=0, columnspan=2)
+        self.connection_status.grid(row=9, column=0, columnspan=2)
 
-        ttk.Label(self.connection_frame, text="Logs de conexão:").grid(row=8, column=0, sticky="w")
+        ttk.Label(self.connection_frame, text="Logs de conexão:").grid(row=10, column=0, sticky="w")
         self.connection_log = scrolledtext.ScrolledText(self.connection_frame, width=80, height=8, state="disabled")
-        self.connection_log.grid(row=9, column=0, columnspan=3, padx=5, pady=4, sticky="nsew")
+        self.connection_log.grid(row=11, column=0, columnspan=3, padx=5, pady=4, sticky="nsew")
 
         ttk.Label(
             self.connection_frame,
@@ -112,11 +119,11 @@ class SamsungUnlockGUI:
             wraplength=480,
             foreground="gray",
             justify="left",
-        ).grid(row=8, column=0, columnspan=3, pady=(6, 0), sticky="w")
+        ).grid(row=10, column=0, columnspan=3, pady=(6, 0), sticky="w")
 
         # Ajuste de grid para treeview expandir
         self.connection_frame.grid_rowconfigure(2, weight=1)
-        self.connection_frame.grid_rowconfigure(9, weight=1)
+        self.connection_frame.grid_rowconfigure(11, weight=1)
         self.connection_frame.grid_columnconfigure(1, weight=1)
         self.refresh_devices()
         self._schedule_auto_refresh()
@@ -164,19 +171,22 @@ class SamsungUnlockGUI:
         """Configura aba de remoção de bloqueio de tela"""
         ttk.Label(self.lock_removal_frame, text="Tipo de Bloqueio:").grid(row=0, column=0)
         
-        self.lock_type = ttk.Combobox(self.lock_removal_frame, 
+        self.lock_type = ttk.Combobox(self.lock_removal_frame,
                                     values=["Automático", "PIN", "Senha", "Padrão"])
         self.lock_type.grid(row=0, column=1)
         self.lock_type.current(0)
-        
+
         ttk.Button(self.lock_removal_frame, text="Remover Bloqueio",
                   command=self.remove_lock).grid(row=1, column=0, columnspan=2)
 
+        ttk.Button(self.lock_removal_frame, text="Hard reset (multi-estratégia)",
+                  command=self.hard_reset).grid(row=2, column=0, columnspan=2, pady=(4, 2))
+
         self.lock_progress = ttk.Progressbar(self.lock_removal_frame, mode="determinate", length=250)
-        self.lock_progress.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
+        self.lock_progress.grid(row=3, column=0, columnspan=2, padx=5, pady=5)
 
         self.lock_status = ttk.Label(self.lock_removal_frame, text="Pronto")
-        self.lock_status.grid(row=3, column=0, columnspan=2)
+        self.lock_status.grid(row=4, column=0, columnspan=2)
     
     def setup_log_tab(self):
         """Configura aba de logs"""
@@ -288,6 +298,20 @@ class SamsungUnlockGUI:
                 ).start()
         for label in sorted(removed):
             self._log_connection(f"Removido: {label}")
+
+    def show_device_information(self):
+        info = self.controller.device_information()
+        if not info:
+            messagebox.showwarning("Informações", "Nenhuma informação disponível. Conecte um dispositivo.")
+            return
+        lines = []
+        for key, value in info.items():
+            if value:
+                lines.append(f"{key}: {value}")
+        self.device_info_box.configure(state="normal")
+        self.device_info_box.delete("1.0", tk.END)
+        self.device_info_box.insert(tk.END, "\n".join(lines))
+        self.device_info_box.configure(state="disabled")
 
     def disconnect_device(self):
         """Desconecta do dispositivo"""
@@ -407,6 +431,26 @@ class SamsungUnlockGUI:
                 messagebox.showerror("Erro", str(e))
 
         threading.Thread(target=remove_lock_thread, daemon=True).start()
+
+    def hard_reset(self):
+        def hard_reset_thread():
+            try:
+                self.lock_status.config(text="Executando hard reset...")
+                self.lock_progress['value'] = 40
+                if self.controller.hard_reset():
+                    self.lock_progress['value'] = 100
+                    self.lock_status.config(text="Hard reset concluído")
+                    messagebox.showinfo("Sucesso", "Hard reset executado.")
+                else:
+                    self.lock_progress['value'] = 0
+                    self.lock_status.config(text="Falha no hard reset")
+                    messagebox.showerror("Erro", "Hard reset falhou")
+            except Exception as exc:
+                self.lock_progress['value'] = 0
+                self.lock_status.config(text=f"Erro: {exc}")
+                messagebox.showerror("Erro", str(exc))
+
+        threading.Thread(target=hard_reset_thread, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Firmware

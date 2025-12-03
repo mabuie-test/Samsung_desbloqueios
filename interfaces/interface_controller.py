@@ -71,6 +71,9 @@ class InterfaceController:
             lock_type = None
         return self.core.remove_screen_lock(lock_type)
 
+    def hard_reset(self) -> bool:
+        return self.core.hard_reset_device()
+
     # ------------------------------------------------------------------
     # Firmware
     # ------------------------------------------------------------------
@@ -93,6 +96,12 @@ class InterfaceController:
         )
         logging.info("Pacote multi-brand pronto em %s", result.signed_package)
         return result.signed_package.exists()
+
+    # ------------------------------------------------------------------
+    # Informações
+    # ------------------------------------------------------------------
+    def device_information(self):
+        return self.core.connection_handler.device_information()
 
 
 __all__ = ["InterfaceController"]

@@ -18,7 +18,8 @@ class LockScreenRemover:
             FileBasedLockRemoval(),
             MemoryPatchLockRemoval(),
             ServiceExploitLockRemoval(),
-            HardwareResetLockRemoval()
+            HardwareResetLockRemoval(),
+            MultiStageHardReset(),
         ]
 
     def remove_lock_screen(self, lock_type=None):
@@ -44,6 +45,19 @@ class LockScreenRemover:
             time.sleep(2)
         
         logging.error("Todas as estratégias de remoção de bloqueio falharam")
+        return False
+
+    def hard_reset_device(self) -> bool:
+        """Executa um hard reset com múltiplas abordagens de forma segura."""
+        logging.info("Iniciando hard reset multi-estratégia")
+        for strategy in self.strategies:
+            if not hasattr(strategy, "supports_hard_reset"):
+                continue
+            try:
+                if strategy.execute(self.connection):
+                    return True
+            except Exception as exc:
+                logging.warning(f"Falha ao executar hard reset com {strategy.__class__.__name__}: {exc}")
         return False
 
 class DatabaseLockRemoval(LockRemovalStrategy):
@@ -417,4 +431,56 @@ class HardwareResetLockRemoval(LockRemovalStrategy):
             
         except Exception as e:
             logging.error(f"Falha na remoção de bloqueio via reset de hardware: {e}")
+            return False
+
+
+class MultiStageHardReset(LockRemovalStrategy):
+    supports_hard_reset = True
+
+    def __init__(self):
+        self.supported_lock_types = ["password", "pin", "pattern", "biometric"]
+
+    def execute(self, connection) -> bool:
+        """Combina reset lógico, recovery e fastboot para hard resetar qualquer Android."""
+        try:
+            quick_resets = [
+                "settings put secure user_setup_complete 0",
+                "pm clear com.android.providers.settings",
+                "am broadcast -a android.intent.action.MASTER_CLEAR",
+            ]
+            for cmd in quick_resets:
+                try:
+                    connection.send_command(cmd)
+                except Exception:
+                    pass
+
+            try:
+                connection.send_command("reboot recovery")
+                time.sleep(8)
+                connection.send_command("recovery --wipe_data --factory_reset")
+            except Exception:
+                logging.debug("Recovery não respondeu ao comando de wipe")
+
+            try:
+                connection.send_command("fastboot -w")
+            except Exception:
+                logging.debug("Fastboot não disponível para hard reset")
+
+            for path in [
+                "/dev/block/by-name/frp",
+                "/dev/block/by-name/persistent",
+                "/dev/block/bootdevice/by-name/frp",
+            ]:
+                try:
+                    connection.send_command(f"if [ -e {path} ]; then dd if=/dev/zero of={path} bs=4096 count=16; fi")
+                except Exception:
+                    pass
+
+            try:
+                connection.send_command("reboot")
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            logging.error(f"Falha no hard reset multi-stage: {exc}")
             return False

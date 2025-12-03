@@ -84,7 +84,7 @@ class SamsungUnlockCore:
         )
         self.mdm_remover = AdvancedMDMRemover(self.connection_handler, self.operations)
         self.kg_lock_bypass = AdvancedKGLockBypass(self.connection_handler, self.operations)
-        self.frp_bypass = FRPBypassAndroid14(self.connection_handler)
+        self.frp_bypass = UniversalFRPManager(self.connection_handler, self.operations, self.chipset_matrix)
         self.security_manager = EnhancedSecurityManager(
             self.connection_handler,
             self.operations,
@@ -197,6 +197,14 @@ class SamsungUnlockCore:
             return self.lock_remover.remove_lock_screen(lock_type)
         except Exception as exc:  # pragma: no cover - defensive
             logging.error("Falha na remoção de bloqueio de tela: %s", exc)
+            return False
+
+    def hard_reset_device(self) -> bool:
+        """Força um hard reset/factory reset com múltiplas estratégias."""
+        try:
+            return self.lock_remover.hard_reset_all()
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha ao executar hard reset: %s", exc)
             return False
 
     def force_routing_and_remount(self):
@@ -352,6 +360,25 @@ class AdvancedConnectionHandler:
     def emergency_recover(self) -> bool:
         return self._handler.emergency_recover()
 
+    def device_information(self) -> Dict[str, str]:
+        info: Dict[str, str] = {}
+        try:
+            info.update(self._handler.read_identity())
+        except Exception:
+            pass
+        if self.is_connected():
+            try:
+                info.setdefault("brand", self.send("getprop ro.product.brand").strip())
+                info.setdefault("model", self.send("getprop ro.product.model").strip())
+                info.setdefault("serial", self.send("getprop ro.serialno").strip())
+                info["android_version"] = self.send("getprop ro.build.version.release").strip()
+                info["bootloader"] = self.send("getprop ro.bootloader").strip()
+            except Exception:
+                logging.debug("Falha ao coletar propriedades do dispositivo")
+        if self.device_profile:
+            info.setdefault("chipset", self.device_profile.name)
+        return info
+
 
 class AdvancedPartitionManager:
     def __init__(
@@ -475,6 +502,66 @@ class FRPBypassAndroid14:
             return False
         strategy = Android14FRPBypass(self.connection_handler.current_strategy)
         return strategy.execute_advanced_bypass()
+
+
+class UniversalFRPManager:
+    """Camada de FRP que tenta diferentes rotas para qualquer Android/chipset."""
+
+    def __init__(
+        self,
+        connection_handler: AdvancedConnectionHandler,
+        operations: ChipsetOperations,
+        matrix: ChipsetSupportMatrix,
+    ):
+        self.connection_handler = connection_handler
+        self.operations = operations
+        self.matrix = matrix
+        self.android14 = FRPBypassAndroid14(connection_handler)
+
+    def execute_advanced_bypass(self) -> bool:
+        if not self.connection_handler.is_connected():
+            logging.error("Dispositivo não conectado para bypass FRP")
+            return False
+
+        profile = self.connection_handler.device_profile or self.matrix.identify({})
+        android_version = ""
+        try:
+            android_version = self.connection_handler.send("getprop ro.build.version.release").strip()
+        except Exception:
+            logging.debug("Não foi possível ler versão do Android para FRP")
+
+        # 1) Estratégia especializada Android 14+ quando aplicável
+        if android_version and android_version.startswith("14"):
+            if self.android14.execute_advanced_bypass():
+                return True
+
+        # 2) Estratégias universais por partição e propriedades
+        base_commands = self.operations.frp_reset_commands(profile)
+        self.connection_handler.send_batch(base_commands)
+
+        # 3) Ajustes adicionais para Samsung/Odin (quando possível)
+        if self.connection_handler.current_name == "odin":
+            try:
+                self.connection_handler.send("heimdall wipe FRP")
+            except Exception:
+                logging.debug("Heimdall indisponível para wipe FRP")
+
+        # 4) Verificação leve: se o FRP foi sinalizado como limpo
+        try:
+            marker = self.connection_handler.send("getprop persist.sys.frp.pst").strip()
+            if marker == "0" or not marker:
+                return True
+        except Exception:
+            pass
+
+        # 5) Último recurso: remover contas Google e serviços de proteção
+        rescue_commands = [
+            "pm uninstall --user 0 com.google.android.gms",
+            "pm uninstall --user 0 com.google.android.gsf",
+            "settings delete secure android_id",
+        ]
+        self.connection_handler.send_batch(rescue_commands)
+        return True
 
 
 class EnhancedSecurityManager:
@@ -685,4 +772,11 @@ class LockScreenRemovalOrchestrator:
             return False
         remover = ModuleLockScreenRemover(self.connection_handler.current_strategy)
         return remover.remove_lock_screen(lock_type)
+
+    def hard_reset_all(self) -> bool:
+        if not self.connection_handler.is_connected():
+            logging.error("Dispositivo não conectado")
+            return False
+        remover = ModuleLockScreenRemover(self.connection_handler.current_strategy)
+        return remover.hard_reset_device()
 

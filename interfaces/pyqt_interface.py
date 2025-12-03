@@ -115,9 +115,16 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         button_layout = QtWidgets.QHBoxLayout()
         self.connect_button = QtWidgets.QPushButton("Conectar")
         self.disconnect_button = QtWidgets.QPushButton("Desconectar")
+        self.info_button = QtWidgets.QPushButton("Obter informações")
         button_layout.addWidget(self.connect_button)
         button_layout.addWidget(self.disconnect_button)
+        button_layout.addWidget(self.info_button)
         form.addRow(button_layout)
+
+        self.device_info_box = QtWidgets.QTextEdit()
+        self.device_info_box.setReadOnly(True)
+        self.device_info_box.setPlaceholderText("Marca, modelo, serial e versão aparecerão aqui")
+        form.addRow("Informações do dispositivo:", self.device_info_box)
 
         self.connection_progress = QtWidgets.QProgressBar()
         self.connection_progress.setRange(0, 100)
@@ -144,6 +151,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         self.connect_button.clicked.connect(self._connect_device)
         self.disconnect_button.clicked.connect(self._disconnect_device)
+        self.info_button.clicked.connect(self._show_device_information)
 
         self._refresh_devices(auto=False)
         self._start_auto_refresh()
@@ -282,7 +290,9 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         form.addRow("Tipo de Bloqueio:", self.lock_type)
 
         self.lock_button = QtWidgets.QPushButton("Remover Bloqueio")
+        self.hardreset_button = QtWidgets.QPushButton("Hard reset (multi-estratégia)")
         form.addRow(self.lock_button)
+        form.addRow(self.hardreset_button)
 
         self.lock_progress = QtWidgets.QProgressBar()
         self.lock_progress.setRange(0, 100)
@@ -292,6 +302,7 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         form.addRow("Status:", self.lock_status)
 
         self.lock_button.clicked.connect(self._remove_lock)
+        self.hardreset_button.clicked.connect(self._hard_reset)
 
         self.tab_widget.addTab(widget, "Remoção de Bloqueio")
 
@@ -417,6 +428,19 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         for label in sorted(removed):
             self._append_connection_log(f"Removido: {label}")
 
+    def _show_device_information(self) -> None:
+        info = self.controller.device_information()
+        if not info:
+            self._show_warning("Informações", "Nenhum dado disponível. Conecte um dispositivo.")
+            return
+        lines = [f"{k}: {v}" for k, v in info.items() if v]
+        QtCore.QMetaObject.invokeMethod(
+            self.device_info_box,
+            "setPlainText",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(str, "\n".join(lines)),
+        )
+
     def _disconnect_device(self) -> None:
         self._update_status(self.connection_status, "Desconectado")
         self.controller.disconnect()
@@ -508,6 +532,27 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                     self._show_error("Erro", "Falha ao remover bloqueio")
             except Exception as exc:  # pragma: no cover
                 logging.exception("Falha na remoção de bloqueio")
+                self._update_progress_bar(self.lock_progress, 0)
+                self._update_status(self.lock_status, f"Erro: {exc}")
+                self._show_error("Erro", str(exc))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _hard_reset(self) -> None:
+        def task():
+            try:
+                self._update_status(self.lock_status, "Executando hard reset...")
+                self._update_progress_bar(self.lock_progress, 40)
+                if self.controller.hard_reset():
+                    self._update_progress_bar(self.lock_progress, 100)
+                    self._update_status(self.lock_status, "Hard reset concluído")
+                    self._show_info("Sucesso", "Hard reset executado")
+                else:
+                    self._update_progress_bar(self.lock_progress, 0)
+                    self._update_status(self.lock_status, "Hard reset falhou")
+                    self._show_error("Erro", "Hard reset falhou")
+            except Exception as exc:
+                logging.exception("Hard reset falhou")
                 self._update_progress_bar(self.lock_progress, 0)
                 self._update_status(self.lock_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
