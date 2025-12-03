@@ -98,32 +98,55 @@ class FirmwareNeutralizer:
         self.packager = FirmwarePackager()
 
     def neutralize_archive(
-        self, archive: Path, destination: Optional[Path] = None, *, verify: bool = True, plan: Optional[SanitizationPlan] = None
+        self,
+        archive: Path,
+        destination: Optional[Path] = None,
+        *,
+        verify: bool = True,
+        plan: Optional[SanitizationPlan] = None,
+        progress_cb=None,
+        cancel_event=None,
     ) -> SanitizationResult:
         plan = plan or SanitizationPlan()
         archive = archive.expanduser().resolve()
-        extracted = self.extractor.extract(archive, destination, verify=verify)
-        cleaned = self._neutralize_directory(extracted.destination, plan)
+        if progress_cb:
+            progress_cb(10)
+        extracted = self.extractor.extract(archive, destination, verify=verify, progress_cb=progress_cb, cancel_event=cancel_event)
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Operação cancelada")
+        if progress_cb:
+            progress_cb(55)
+        cleaned = self._neutralize_directory(extracted.destination, plan, cancel_event, progress_cb)
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Operação cancelada")
         self.signer.sign_directory(extracted.destination)
+        if progress_cb:
+            progress_cb(85)
         packaged = self.packager.package_directory(extracted.destination, archive.stem)
+        if progress_cb:
+            progress_cb(100)
         return SanitizationResult(archive, extracted.destination, packaged, cleaned)
 
     def neutralize_directories(
-        self, directories: Iterable[Path], *, plan: Optional[SanitizationPlan] = None
+        self, directories: Iterable[Path], *, plan: Optional[SanitizationPlan] = None, progress_cb=None, cancel_event=None
     ) -> List[SanitizationResult]:
         results: List[SanitizationResult] = []
         plan = plan or SanitizationPlan()
         for directory in directories:
             directory = directory.expanduser().resolve()
-            cleaned = self._neutralize_directory(directory, plan)
+            cleaned = self._neutralize_directory(directory, plan, cancel_event, progress_cb)
             self.signer.sign_directory(directory)
             packaged = self.packager.package_directory(directory)
             results.append(SanitizationResult(directory, directory, packaged, cleaned))
         return results
 
-    def _neutralize_directory(self, directory: Path, plan: SanitizationPlan) -> List[Path]:
+    def _neutralize_directory(self, directory: Path, plan: SanitizationPlan, cancel_event=None, progress_cb=None) -> List[Path]:
         removed: List[Path] = []
-        for pattern in plan.google_packages + plan.mdm_artifacts + plan.frp_flags:
+        patterns = plan.google_packages + plan.mdm_artifacts + plan.frp_flags
+        total = len(patterns) or 1
+        for idx, pattern in enumerate(patterns, 1):
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError("Operação cancelada")
             for target in directory.rglob(f"*{pattern}*"):
                 try:
                     if target.is_file():
@@ -140,6 +163,8 @@ class FirmwareNeutralizer:
                         removed.append(target)
                 except OSError as exc:
                     logging.debug("Falha ao remover %s: %s", target, exc)
+            if progress_cb:
+                progress_cb(55 + int((idx / total) * 20))
         logging.info("Itens neutralizados: %s", len(removed))
         return removed
 

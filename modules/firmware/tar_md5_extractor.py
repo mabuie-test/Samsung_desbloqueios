@@ -30,7 +30,15 @@ class TarMD5Extractor:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def extract(self, archive: Path, destination: Optional[Path] = None, *, verify: bool = True) -> ExtractionResult:
+    def extract(
+        self,
+        archive: Path,
+        destination: Optional[Path] = None,
+        *,
+        verify: bool = True,
+        progress_cb=None,
+        cancel_event=None,
+    ) -> ExtractionResult:
         """Extract the provided archive into ``destination``.
 
         Parameters
@@ -48,13 +56,21 @@ class TarMD5Extractor:
             destination = self.firmware_root / archive.stem
         destination.mkdir(parents=True, exist_ok=True)
 
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Operação cancelada")
+
         verified, tar_size = (False, None)
         if verify:
             verified, tar_size = self._verify_archive(archive)
         if tar_size is None:
             tar_size = archive.stat().st_size
 
-        extracted_files = self._extract_tar(archive, destination, tar_size)
+        if progress_cb:
+            progress_cb(35)
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Operação cancelada")
+
+        extracted_files = self._extract_tar(archive, destination, tar_size, progress_cb, cancel_event)
         verification_state = verified if verify else True
         return ExtractionResult(archive, destination, extracted_files, verification_state)
 
@@ -84,16 +100,27 @@ class TarMD5Extractor:
         calculated = md5.hexdigest()
         return calculated == checksum, tar_size
 
-    def _extract_tar(self, archive: Path, destination: Path, tar_size: int) -> List[Path]:
+    def _extract_tar(
+        self,
+        archive: Path,
+        destination: Path,
+        tar_size: int,
+        progress_cb=None,
+        cancel_event=None,
+    ) -> List[Path]:
         """Extract tar payload and return the list of created files."""
         extracted: List[Path] = []
         with self._temporary_tar(archive, tar_size) as tar_path:
             with tarfile.open(tar_path, "r:*") as tar:
-                for member in tar.getmembers():
-                    if not member.isfile():
-                        continue
+                members = [m for m in tar.getmembers() if m.isfile()]
+                total = len(members) or 1
+                for idx, member in enumerate(members, 1):
+                    if cancel_event and cancel_event.is_set():
+                        raise RuntimeError("Operação cancelada")
                     tar.extract(member, path=destination)
                     extracted.append(destination / member.name)
+                    if progress_cb:
+                        progress_cb(35 + int((idx / total) * 20))
         return extracted
 
     def _split_checksum(self, archive: Path) -> Tuple[Optional[int], Optional[str]]:

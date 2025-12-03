@@ -25,28 +25,28 @@ class MultiBrandNeutralizationManager:
     def __init__(self, neutralizer: Optional[FirmwareNeutralizer] = None):
         self.neutralizer = neutralizer or FirmwareNeutralizer()
 
-    def neutralize_any(self, archive: Path, destination: Optional[Path] = None) -> MultiBrandResult:
+    def neutralize_any(self, archive: Path, destination: Optional[Path] = None, *, progress_cb=None, cancel_event=None) -> MultiBrandResult:
         archive = archive.expanduser().resolve()
         extension = archive.suffix.lower()
         if archive.name.endswith(".tar.md5") or extension == ".tar":
-            sanitized = self.neutralizer.neutralize_archive(archive, destination)
+            sanitized = self.neutralizer.neutralize_archive(archive, destination, progress_cb=progress_cb, cancel_event=cancel_event)
             return MultiBrandResult(archive, sanitized, "tar")
         if extension == ".zip":
             prepared = self._extract_zip(archive, destination)
-            sanitized = self.neutralizer.neutralize_directories([prepared])[0]
+            sanitized = self.neutralizer.neutralize_directories([prepared], progress_cb=progress_cb, cancel_event=cancel_event)[0]
             return MultiBrandResult(archive, sanitized, "zip")
         if extension in {".bin", ".nb0", ".pac"}:
             prepared = self._wrap_raw_binary(archive, destination)
-            sanitized = self.neutralizer.neutralize_directories([prepared])[0]
+            sanitized = self.neutralizer.neutralize_directories([prepared], progress_cb=progress_cb, cancel_event=cancel_event)[0]
             return MultiBrandResult(archive, sanitized, extension.strip("."))
-        sanitized = self.neutralizer.neutralize_archive(archive, destination)
+        sanitized = self.neutralizer.neutralize_archive(archive, destination, progress_cb=progress_cb, cancel_event=cancel_event)
         return MultiBrandResult(archive, sanitized, extension.strip("."))
 
-    def neutralize_many(self, archives: List[Path], destination: Optional[Path] = None) -> List[MultiBrandResult]:
+    def neutralize_many(self, archives: List[Path], destination: Optional[Path] = None, *, progress_cb=None, cancel_event=None) -> List[MultiBrandResult]:
         results: List[MultiBrandResult] = []
         for archive in archives:
             try:
-                results.append(self.neutralize_any(archive, destination))
+                results.append(self.neutralize_any(archive, destination, progress_cb=progress_cb, cancel_event=cancel_event))
             except Exception as exc:
                 logging.error("Falha ao neutralizar %s: %s", archive, exc)
         return results

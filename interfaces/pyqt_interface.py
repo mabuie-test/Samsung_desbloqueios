@@ -89,9 +89,15 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout(widget)
 
         self.connection_mode = QtWidgets.QComboBox()
-        self.connection_mode.addItems(["ADB", "USB Raw", "EDL", "Serial"])
+        self.connection_mode.addItems(["ADB", "MTP", "Odin", "USB Raw", "EDL", "Serial", "Fastboot"])
         self.connection_mode.setCurrentIndex(0)
         form.addRow("Modo de Conexão:", self.connection_mode)
+
+        self.devices_view = QtWidgets.QListWidget()
+        form.addRow("Dispositivos detectados:", self.devices_view)
+        refresh_btn = QtWidgets.QPushButton("Atualizar")
+        refresh_btn.clicked.connect(self._refresh_devices)
+        form.addRow(refresh_btn)
 
         self.device_model = QtWidgets.QLineEdit()
         self.device_model.setPlaceholderText("Ex: SM-A546E ou modelo equivalente")
@@ -121,6 +127,8 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         self.connect_button.clicked.connect(self._connect_device)
         self.disconnect_button.clicked.connect(self._disconnect_device)
+
+        self._refresh_devices()
 
         self.tab_widget.addTab(widget, "Conexão")
 
@@ -152,7 +160,21 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         form.addRow(self.sanitize_samsung)
         form.addRow(self.sanitize_multi)
+
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, 100)
+        self.cancel_button = QtWidgets.QPushButton("Cancelar")
+        self.cancel_button.clicked.connect(self._cancel_sanitization)
+        progress_layout = QtWidgets.QHBoxLayout()
+        progress_layout.addWidget(self.progress)
+        progress_layout.addWidget(self.cancel_button)
+        form.addRow(progress_layout)
+
         form.addRow("Status:", self.sanitize_status)
+
+        self.fw_log = QtWidgets.QTextEdit()
+        self.fw_log.setReadOnly(True)
+        form.addRow("Logs:", self.fw_log)
 
         helper = QtWidgets.QLabel(
             "Sequência: escolha o pacote original, defina destino (opcional) e acione a neutralização. "
@@ -266,14 +288,19 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
     def _connect_device(self) -> None:
         def task():
             try:
-                device_info = {
-                    "model": self.device_model.text(),
-                    "serial": self.device_serial.text(),
-                    "connection_type": self.connection_mode.currentText(),
-                }
-                if self.controller.connect(
-                    device_info["model"], device_info["serial"], device_info["connection_type"]
-                ):
+                selected_items = self.devices_view.selectedItems()
+                chosen_label = selected_items[0].text() if selected_items else None
+                info = self._discovered.get(chosen_label, {}) if hasattr(self, "_discovered") else {}
+                model = info.get("model", self.device_model.text())
+                serial = info.get("serial", self.device_serial.text())
+                mode = info.get("connection_type", self.connection_mode.currentText())
+
+                if self.controller.connect(model, serial, mode):
+                    identity = self.controller.fetch_identity()
+                    if identity.get("model"):
+                        self._update_line(self.device_model, identity.get("model"))
+                    if identity.get("serial"):
+                        self._update_line(self.device_serial, identity.get("serial"))
                     self._update_status(self.connection_status, "Conectado!")
                     self._show_info("Sucesso", "Dispositivo conectado!")
                 else:
@@ -285,6 +312,16 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                 self._show_error("Erro", str(exc))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _update_line(self, widget: QtWidgets.QLineEdit, value: str) -> None:
+        QtCore.QMetaObject.invokeMethod(widget, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, value))
+
+    def _refresh_devices(self) -> None:
+        devices = self.controller.discover_devices()
+        self._discovered = {d.get("label", f"Dev{i}"): d for i, d in enumerate(devices)}
+        self.devices_view.clear()
+        for label in self._discovered:
+            self.devices_view.addItem(label)
 
     def _disconnect_device(self) -> None:
         self._update_status(self.connection_status, "Desconectado")
@@ -393,8 +430,9 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
 
         def task():
             try:
+                self._cancel_event = threading.Event()
                 self._update_status(self.sanitize_status, "Processando...")
-                ok = handler(archive, destination)
+                ok = handler(archive, destination, progress_cb=self._update_progress, cancel_event=self._cancel_event)
                 if ok:
                     self._update_status(self.sanitize_status, "Pacote neutralizado e assinado")
                     self._show_info("Sucesso", "Pacote pronto para uso no Odin")
@@ -403,10 +441,32 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                     self._show_error("Erro", "Falha ao processar firmware")
             except Exception as exc:  # pragma: no cover
                 logging.exception("Falha ao sanitizar firmware")
-                self._update_status(self.sanitize_status, f"Erro: {exc}")
-                self._show_error("Erro", str(exc))
+                if str(exc) == "Operação cancelada":
+                    self._update_status(self.sanitize_status, "Operação cancelada")
+                else:
+                    self._update_status(self.sanitize_status, f"Erro: {exc}")
+                    self._show_error("Erro", str(exc))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _cancel_sanitization(self) -> None:
+        if hasattr(self, "_cancel_event"):
+            self._cancel_event.set()
+            self._update_status(self.sanitize_status, "Cancelando...")
+
+    def _update_progress(self, value: int) -> None:
+        QtCore.QMetaObject.invokeMethod(
+            self.progress,
+            "setValue",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(int, value),
+        )
+        QtCore.QMetaObject.invokeMethod(
+            self.fw_log,
+            "append",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(str, f"Progresso: {value}%"),
+        )
 
 
 def run_pyqt_gui() -> None:

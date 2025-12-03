@@ -31,6 +31,12 @@ class InterfaceController:
         logging.debug("Solicitação de conexão via interface: %s", device_info)
         return self.core.connection_handler.establish_connection(device_info, prefer_edl=prefer_edl)
 
+    def discover_devices(self):
+        return self.core.connection_handler._handler.discover_devices()
+
+    def fetch_identity(self):
+        return self.core.connection_handler._handler.read_identity()
+
     def disconnect(self) -> None:
         logging.info("Interface solicitou desconexão")
         self.core.connection_handler.emergency_recover()
@@ -55,17 +61,23 @@ class InterfaceController:
     # ------------------------------------------------------------------
     # Firmware
     # ------------------------------------------------------------------
-    def sanitize_firmware(self, archive_path: str, destination: Optional[str] = None) -> bool:
+    def sanitize_firmware(self, archive_path: str, destination: Optional[str] = None, *, progress_cb=None, cancel_event=None) -> bool:
         archive = Path(archive_path).expanduser()
         dest = Path(destination).expanduser() if destination else None
-        result = self.core.firmware_tools.neutralizer.neutralize_archive(archive, dest)
+        result = self.core.firmware_tools.neutralizer.neutralize_archive(
+            archive, dest, progress_cb=progress_cb, cancel_event=cancel_event
+        )
         logging.info("Pacote sanitizado em %s", result.prepared_directory)
         return result.signed_package.exists()
 
-    def sanitize_multi_brand(self, archive_path: str, destination: Optional[str] = None) -> bool:
+    def sanitize_multi_brand(
+        self, archive_path: str, destination: Optional[str] = None, *, progress_cb=None, cancel_event=None
+    ) -> bool:
         archive = Path(archive_path).expanduser()
         dest = Path(destination).expanduser() if destination else None
-        result = self.core.firmware_tools.multi_brand_manager.neutralize_any(archive, dest)
+        result = self.core.firmware_tools.multi_brand_manager.neutralize_any(
+            archive, dest, progress_cb=progress_cb, cancel_event=cancel_event
+        )
         logging.info("Pacote multi-brand pronto em %s", result.signed_package)
         return result.signed_package.exists()
 

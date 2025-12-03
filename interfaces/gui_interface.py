@@ -59,27 +59,37 @@ class SamsungUnlockGUI:
     def setup_connection_tab(self):
         """Configura aba de conexão"""
         ttk.Label(self.connection_frame, text="Modo de Conexão:").grid(row=0, column=0)
-        self.connection_mode = ttk.Combobox(self.connection_frame,
-                                          values=["ADB", "USB Raw", "EDL", "Serial"])
+        self.connection_mode = ttk.Combobox(
+            self.connection_frame,
+            values=["ADB", "MTP", "Odin", "USB Raw", "EDL", "Serial", "Fastboot"],
+        )
         self.connection_mode.grid(row=0, column=1)
         self.connection_mode.current(0)
-        
-        ttk.Label(self.connection_frame, text="Modelo:").grid(row=1, column=0)
+
+        ttk.Label(self.connection_frame, text="Dispositivos detectados:").grid(row=1, column=0, sticky="w")
+        self.devices_tree = ttk.Treeview(self.connection_frame, columns=("label",), show="headings", height=5)
+        self.devices_tree.heading("label", text="Porta / Identificação")
+        self.devices_tree.grid(row=2, column=0, columnspan=3, sticky="nsew", padx=5, pady=5)
+
+        refresh_btn = ttk.Button(self.connection_frame, text="Atualizar", command=self.refresh_devices)
+        refresh_btn.grid(row=1, column=2, sticky="e")
+
+        ttk.Label(self.connection_frame, text="Modelo:").grid(row=3, column=0)
         self.device_model = ttk.Entry(self.connection_frame)
-        self.device_model.grid(row=1, column=1)
-        
-        ttk.Label(self.connection_frame, text="Serial:").grid(row=2, column=0)
+        self.device_model.grid(row=3, column=1)
+
+        ttk.Label(self.connection_frame, text="Serial:").grid(row=4, column=0)
         self.device_serial = ttk.Entry(self.connection_frame)
-        self.device_serial.grid(row=2, column=1)
-        
-        ttk.Button(self.connection_frame, text="Conectar", 
-                  command=self.connect_device).grid(row=3, column=0)
-        
-        ttk.Button(self.connection_frame, text="Desconectar", 
-                  command=self.disconnect_device).grid(row=3, column=1)
-        
+        self.device_serial.grid(row=4, column=1)
+
+        ttk.Button(self.connection_frame, text="Conectar",
+                  command=self.connect_device).grid(row=5, column=0)
+
+        ttk.Button(self.connection_frame, text="Desconectar",
+                  command=self.disconnect_device).grid(row=5, column=1)
+
         self.connection_status = ttk.Label(self.connection_frame, text="Desconectado")
-        self.connection_status.grid(row=4, column=0, columnspan=2)
+        self.connection_status.grid(row=6, column=0, columnspan=2)
 
         ttk.Label(
             self.connection_frame,
@@ -88,7 +98,12 @@ class SamsungUnlockGUI:
             wraplength=480,
             foreground="gray",
             justify="left",
-        ).grid(row=5, column=0, columnspan=2, pady=(6, 0), sticky="w")
+        ).grid(row=7, column=0, columnspan=3, pady=(6, 0), sticky="w")
+
+        # Ajuste de grid para treeview expandir
+        self.connection_frame.grid_rowconfigure(2, weight=1)
+        self.connection_frame.grid_columnconfigure(1, weight=1)
+        self.refresh_devices()
     
     def setup_mdm_tab(self):
         """Configura aba de remoção de MDM"""
@@ -152,11 +167,26 @@ class SamsungUnlockGUI:
         """Conecta ao dispositivo em thread separada"""
         def connect_thread():
             try:
-                if self.controller.connect(
-                    self.device_model.get(),
-                    self.device_serial.get(),
-                    self.connection_mode.get(),
-                ):
+                selected = self.devices_tree.selection()
+                selected_info = self.devices_tree.item(selected[0], "values")[0] if selected else None
+                if selected_info and selected_info in self._discovered:
+                    info = self._discovered[selected_info]
+                    model = info.get("model", self.device_model.get())
+                    serial = info.get("serial", self.device_serial.get())
+                    mode = info.get("connection_type", self.connection_mode.get())
+                else:
+                    model = self.device_model.get()
+                    serial = self.device_serial.get()
+                    mode = self.connection_mode.get()
+
+                if self.controller.connect(model, serial, mode):
+                    identity = self.controller.fetch_identity()
+                    if identity.get("model"):
+                        self.device_model.delete(0, tk.END)
+                        self.device_model.insert(0, identity.get("model"))
+                    if identity.get("serial"):
+                        self.device_serial.delete(0, tk.END)
+                        self.device_serial.insert(0, identity.get("serial"))
                     self.connection_status.config(text="Conectado!")
                     messagebox.showinfo("Sucesso", "Dispositivo conectado!")
                 else:
@@ -165,8 +195,16 @@ class SamsungUnlockGUI:
             except Exception as e:
                 self.connection_status.config(text=f"Erro: {str(e)}")
                 messagebox.showerror("Erro", str(e))
-        
+
         threading.Thread(target=connect_thread, daemon=True).start()
+
+    def refresh_devices(self):
+        self.devices_tree.delete(*self.devices_tree.get_children())
+        self._discovered = {}
+        for idx, device in enumerate(self.controller.discover_devices()):
+            label = device.get("label") or f"Dispositivo {idx+1}"
+            self._discovered[label] = device
+            self.devices_tree.insert("", "end", values=(label,))
     
     def disconnect_device(self):
         """Desconecta do dispositivo"""
@@ -277,8 +315,17 @@ class SamsungUnlockGUI:
             command=self.sanitize_multibrand,
         ).grid(row=3, column=0, columnspan=3, pady=6)
 
+        self.progress = ttk.Progressbar(self.firmware_frame, orient="horizontal", mode="determinate", length=300)
+        self.progress.grid(row=4, column=0, columnspan=2, pady=6, sticky="w")
+
+        self.cancel_button = ttk.Button(self.firmware_frame, text="Cancelar", command=self.cancel_firmware)
+        self.cancel_button.grid(row=4, column=2, sticky="e")
+
         self.firmware_status = ttk.Label(self.firmware_frame, text="Pronto")
-        self.firmware_status.grid(row=4, column=0, columnspan=3)
+        self.firmware_status.grid(row=5, column=0, columnspan=3)
+
+        self.firmware_log = scrolledtext.ScrolledText(self.firmware_frame, width=110, height=10)
+        self.firmware_log.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
 
         ttk.Label(
             self.firmware_frame,
@@ -287,7 +334,10 @@ class SamsungUnlockGUI:
             wraplength=620,
             foreground="gray",
             justify="left",
-        ).grid(row=5, column=0, columnspan=3, pady=(6, 0), sticky="w")
+        ).grid(row=7, column=0, columnspan=3, pady=(6, 0), sticky="w")
+
+        self.firmware_frame.grid_rowconfigure(6, weight=1)
+        self.firmware_frame.grid_columnconfigure(1, weight=1)
 
     def select_archive(self):
         path = filedialog.askopenfilename()
@@ -315,16 +365,35 @@ class SamsungUnlockGUI:
             return
 
         def task():
+            self._cancel_event = threading.Event()
+            self.progress['value'] = 0
             self.firmware_status.config(text="Processando...")
-            ok = action(archive, destination)
-            if ok:
-                self.firmware_status.config(text="Pacote neutralizado e assinado")
-                messagebox.showinfo("Sucesso", "Pacote pronto para uso no Odin")
-            else:
-                self.firmware_status.config(text="Falha na neutralização")
-                messagebox.showerror("Erro", "Falha ao processar firmware")
+            try:
+                ok = action(archive, destination, progress_cb=self._update_progress, cancel_event=self._cancel_event)
+                if ok:
+                    self.firmware_status.config(text="Pacote neutralizado e assinado")
+                    messagebox.showinfo("Sucesso", "Pacote pronto para uso no Odin")
+                else:
+                    self.firmware_status.config(text="Falha na neutralização")
+                    messagebox.showerror("Erro", "Falha ao processar firmware")
+            except Exception as exc:
+                if str(exc) == "Operação cancelada":
+                    self.firmware_status.config(text="Operação cancelada")
+                else:
+                    self.firmware_status.config(text=f"Erro: {exc}")
+                    messagebox.showerror("Erro", str(exc))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def cancel_firmware(self):
+        if hasattr(self, "_cancel_event"):
+            self._cancel_event.set()
+            self.firmware_status.config(text="Cancelando...")
+
+    def _update_progress(self, value: int):
+        self.progress['value'] = value
+        self.firmware_log.insert(tk.END, f"Progresso: {value}%\n")
+        self.firmware_log.see(tk.END)
 
 class TextHandler(logging.Handler):
     """Handler de logging para exibir logs na interface gráfica"""

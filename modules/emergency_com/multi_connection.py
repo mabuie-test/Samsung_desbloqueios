@@ -4,9 +4,10 @@ from __future__ import annotations
 import logging
 import subprocess
 from abc import ABC, abstractmethod
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 import serial
+from serial.tools import list_ports
 import usb.core
 import usb.util
 
@@ -307,6 +308,47 @@ class OdinDownloadConnection(ConnectionStrategy):
             return False
 
 
+class MTPConnection(ConnectionStrategy):
+    """Permite detectar dispositivos expostos via MTP para leitura básica."""
+
+    def __init__(self):
+        super().__init__()
+        self._device: Optional[usb.core.Device] = None
+
+    def connect(self, device_info: Dict) -> bool:
+        try:
+            # Prioridade para informações já descobertas
+            if device_info.get("connection_type") == "mtp":
+                self.connected = True
+                return True
+
+            self._device = usb.core.find(custom_match=lambda d: self._is_mtp(d))
+            self.connected = self._device is not None
+            return self.connected
+        except Exception:
+            self.connected = False
+            return False
+
+    def _is_mtp(self, device: usb.core.Device) -> bool:
+        try:
+            if device.bDeviceClass == 6:  # Still Image / MTP
+                return True
+            for cfg in device:
+                for intf in cfg:
+                    if intf.bInterfaceClass == 6:
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def send_command(self, command: str) -> str:
+        # Operações MTP não são textuais; oferecemos stub para integridade de fluxo
+        return "MTP operation not interactive"
+
+    def emergency_recovery(self) -> bool:
+        return False
+
+
 class MTKPreloaderConnection(ConnectionStrategy):
     def connect(self, device_info: Dict) -> bool:
         try:
@@ -379,17 +421,20 @@ class ConnectionHandler:
             "odin": OdinDownloadConnection(),
             "mtk_preloader": MTKPreloaderConnection(),
             "spd_diag": SPDDiagnosticConnection(),
+            "mtp": MTPConnection(),
         }
         self.current_strategy: Optional[ConnectionStrategy] = None
+        self.current_name: Optional[str] = None
 
     def establish_connection(self, device_info: Dict, order: Optional[Iterable[str]] = None) -> bool:
-        connection_order = list(order or ["adb", "usb_raw", "serial", "edl", "fastboot"])
+        connection_order = list(order or ["adb", "mtp", "odin", "usb_raw", "serial", "edl", "fastboot"])
         for name in connection_order:
             strategy = self.strategies.get(name)
             if not strategy:
                 continue
             if strategy.connect(device_info):
                 self.current_strategy = strategy
+                self.current_name = name
                 logging.info("Conexão estabelecida via %s", name)
                 return True
         logging.error("Todas as estratégias de conexão falharam")
@@ -407,4 +452,118 @@ class ConnectionHandler:
         if not self.current_strategy:
             return False
         return self.current_strategy.emergency_recovery()
+
+    def discover_devices(self) -> List[Dict[str, str]]:
+        """Lista dispositivos disponíveis em ADB, Fastboot, USB e Serial."""
+        devices: List[Dict[str, str]] = []
+
+        # ADB
+        try:
+            result = subprocess.run(["adb", "devices", "-l"], capture_output=True, text=True, timeout=5)
+            for line in result.stdout.splitlines():
+                if not line or "List of devices" in line or "offline" in line:
+                    continue
+                parts = line.split()
+                if not parts:
+                    continue
+                serial = parts[0]
+                model = next((p.split(":", 1)[1] for p in parts if p.startswith("model:")), "")
+                devices.append(
+                    {
+                        "connection_type": "adb",
+                        "serial": serial,
+                        "model": model,
+                        "label": f"ADB - {serial} {model}".strip(),
+                    }
+                )
+        except Exception:
+            logging.debug("ADB indisponível durante descoberta")
+
+        # Fastboot
+        try:
+            result = subprocess.run(["fastboot", "devices"], capture_output=True, text=True, timeout=5)
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
+                serial = line.split()[0]
+                devices.append(
+                    {
+                        "connection_type": "fastboot",
+                        "serial": serial,
+                        "label": f"Fastboot - {serial}",
+                    }
+                )
+        except Exception:
+            logging.debug("Fastboot indisponível durante descoberta")
+
+        # Serial/EDL enumerations
+        try:
+            for port in list_ports.comports():
+                label = f"Serial {port.device} ({port.description})"
+                devices.append(
+                    {
+                        "connection_type": "serial",
+                        "port": port.device,
+                        "label": label,
+                    }
+                )
+        except Exception:
+            logging.debug("Falha ao listar portas seriais")
+
+        # USB based detection (MTP/Odin/MTK/Qualcomm)
+        try:
+            for dev in usb.core.find(find_all=True):
+                vendor_id = f"{dev.idVendor:04x}"
+                product_id = f"{dev.idProduct:04x}"
+                label = f"USB {vendor_id}:{product_id}"
+                connection_type = "usb_raw"
+                if vendor_id == "04e8":
+                    connection_type = "odin"
+                    label = f"Odin/Download - {label}"
+                elif any(intf.bInterfaceClass == 6 for cfg in dev for intf in cfg):
+                    connection_type = "mtp"
+                    label = f"MTP - {label}"
+                devices.append(
+                    {
+                        "connection_type": connection_type,
+                        "vendor_id": vendor_id,
+                        "product_id": product_id,
+                        "label": label,
+                    }
+                )
+        except Exception:
+            logging.debug("Falha ao enumerar dispositivos USB")
+
+        return devices
+
+    def read_identity(self) -> Dict[str, str]:
+        """Tenta obter modelo/serial automaticamente da estratégia ativa."""
+        if not self.current_strategy:
+            return {}
+        if self.current_name == "adb":
+            try:
+                serial = subprocess.run(["adb", "get-serialno"], capture_output=True, text=True, timeout=5).stdout.strip()
+                model = subprocess.run(
+                    ["adb", "shell", "getprop", "ro.product.model"], capture_output=True, text=True, timeout=5
+                ).stdout.strip()
+                return {"serial": serial, "model": model}
+            except Exception:
+                return {}
+        if self.current_name == "fastboot":
+            try:
+                model = subprocess.run(
+                    ["fastboot", "getvar", "product"], capture_output=True, text=True, timeout=5
+                ).stdout.strip()
+                return {"serial": "", "model": model}
+            except Exception:
+                return {}
+        if self.current_name in {"odin", "mtp"}:
+            try:
+                return {
+                    "serial": "",
+                    "model": "Samsung (Download/MTP)",
+                }
+            except Exception:
+                return {}
+        return {}
 
