@@ -1,0 +1,61 @@
+Como compilar e executar a versão nativa em C
+============================================
+
+Pré-requisitos
+--------------
+- Linux com GCC instalado.
+- ADB (Android Platform Tools) no PATH para que os comandos funcionem.
+
+Compilação
+----------
+1. Entre na pasta `native`:
+   ```bash
+   cd native
+   ```
+2. Compile o binário:
+   ```bash
+   make
+   ```
+   O executável `samsung_unlock` será gerado na mesma pasta.
+
+Execução
+--------
+- Exibir ajuda e opções disponíveis:
+  ```bash
+  ./samsung_unlock --help
+  ```
+- Rodar diagnóstico rápido do ambiente:
+  ```bash
+  ./samsung_unlock --diag
+  ```
+- Listar dispositivos conectados via ADB:
+  ```bash
+  ./samsung_unlock --list
+  ```
+- Reiniciar um dispositivo (modos suportados: normal, recovery, download):
+  ```bash
+  ./samsung_unlock --reboot recovery
+  ```
+- Enviar ficheiro para o dispositivo:
+  ```bash
+  ./samsung_unlock --push caminho/local.zip /sdcard/local.zip
+  ```
+- Copiar ficheiro do dispositivo para o computador:
+  ```bash
+  ./samsung_unlock --pull /sdcard/log.txt ./log.txt
+  ```
+- Executar um comando direto no shell do dispositivo:
+  ```bash
+  ./samsung_unlock --shell "pm list packages"
+  ```
+- Ativar MTP junto com ADB (útil após alguns desbloqueios):
+  ```bash
+  ./samsung_unlock --enable-mtp
+  ```
+
+Limpeza
+-------
+- Para remover o binário gerado:
+  ```bash
+  make clean
+  ```
