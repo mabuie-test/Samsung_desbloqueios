@@ -7,12 +7,16 @@
    - (Opcional) criar venv: `python -m venv venv` e `venv\Scripts\activate`.
    - Atualizar pip: `python -m pip install --upgrade pip`.
    - Instalar requisitos: `pip install -r requirements.txt`.
-4) **Requisitos para C nativo (kernel/USB/EDL acelerados)**:
+4) **Platform-tools (ADB/Fastboot)**:
+   - Baixe o zip oficial do Google: <https://developer.android.com/studio/releases/platform-tools>.
+   - Extraia para `C:\platform-tools` e adicione ao PATH: `setx PATH "%PATH%;C:\\platform-tools"` (feche e abra o CMD depois).
+   - Teste: `adb --version` e `fastboot --version` devem responder.
+5) **Requisitos para C nativo (kernel/USB/EDL acelerados)**:
    - Instale compilador C em Windows: `winget install -e --id Microsoft.VisualStudio.2022.BuildTools` (C++ build tools + Windows 10/11 SDK) **ou** `choco install mingw`.
    - Após instalar, reabra o CMD/PowerShell para carregar as variáveis de ambiente.
    - Com o compilador disponível, o empacotador e os módulos nativos conseguem construir os binários auxiliares automaticamente; se não houver compilador, a ferramenta usa o fallback Python.
-5) **Drivers**: instale drivers Samsung/Qualcomm/MTK/Unisoc; permita assinatura de drivers ao usar cabos EDL.
-6) **Cabo e portas**: prefira cabo USB de boa qualidade e porta USB 2.0 para EDL/test-point.
+6) **Drivers**: instale drivers Samsung/Qualcomm/MTK/Unisoc; permita assinatura de drivers ao usar cabos EDL.
+7) **Cabo e portas**: prefira cabo USB de boa qualidade e porta USB 2.0 para EDL/test-point.
 
 ## 2. Escolha da interface (opcional)
 - **Interface Tk (mais leve)**: `python main.py --tk` ou apenas `python main.py`.

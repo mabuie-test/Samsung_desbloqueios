@@ -1,8 +1,10 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -89,7 +91,31 @@ int km_dump_ring_buffer(const char *destination) {
     return 0;
 }
 
+#else /* _WIN32 */
+
+/*
+ * Versão mínima para Windows: expõe as mesmas funções retornando erros
+ * explícitos para permitir compilação e linkage mesmo sem o módulo de kernel
+ * Linux. As rotinas Python usarão o fallback automaticamente.
+ */
+int km_init(void) { return -ENOTSUP; }
+int km_mount_rw(const char *mountpoint) {
+    (void)mountpoint;
+    return -ENOTSUP;
+}
+int km_set_flag(const char *flag) {
+    (void)flag;
+    return -ENOTSUP;
+}
+int km_dump_ring_buffer(const char *destination) {
+    (void)destination;
+    return -ENOTSUP;
+}
+
+#endif /* _WIN32 */
+
 /*
  * Para compilar:
- *   gcc -shared -fPIC kernel_module.c -o libkernel_module.so
+ *   gcc -shared -fPIC kernel_module.c -o libkernel_module.so (Linux)
+ *   gcc -shared kernel_module.c -o libkernel_module.dll (Windows)
  */

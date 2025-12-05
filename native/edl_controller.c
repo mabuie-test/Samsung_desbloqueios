@@ -1,8 +1,10 @@
 #include <errno.h>
-#include <libusb-1.0/libusb.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <libusb-1.0/libusb.h>
 
 /*
  * edl_controller.c
@@ -90,7 +92,37 @@ void edl_shutdown(void) {
     }
 }
 
+#else /* _WIN32 */
+
+/*
+ * Stub mínimo para Windows: permite compilar a DLL sem libusb, devolvendo
+ * códigos de erro que mantêm o fluxo Python nos fallbacks.
+ */
+int edl_init(void) { return -ENOTSUP; }
+int edl_open(uint16_t vid, uint16_t pid) {
+    (void)vid;
+    (void)pid;
+    return -ENOTSUP;
+}
+int edl_hello(unsigned char *response, int length) {
+    (void)response;
+    (void)length;
+    return -ENOTSUP;
+}
+int edl_execute(unsigned char *cmd, int cmd_len, unsigned char *resp, int resp_len, unsigned int timeout_ms) {
+    (void)cmd;
+    (void)cmd_len;
+    (void)resp;
+    (void)resp_len;
+    (void)timeout_ms;
+    return -ENOTSUP;
+}
+void edl_shutdown(void) {}
+
+#endif /* _WIN32 */
+
 /*
  * Para compilar:
- *   gcc -shared -fPIC edl_controller.c -lusb-1.0 -o libedl_controller.so
+ *   gcc -shared -fPIC edl_controller.c -lusb-1.0 -o libedl_controller.so (Linux)
+ *   gcc -shared edl_controller.c -o libedl_controller.dll (Windows)
  */

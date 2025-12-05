@@ -1,8 +1,10 @@
 #include <errno.h>
-#include <libusb-1.0/libusb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <libusb-1.0/libusb.h>
 
 /*
  * usb_controller.c
@@ -77,7 +79,41 @@ void usb_shutdown(void) {
     }
 }
 
+#else /* _WIN32 */
+
+/*
+ * Stub para Windows: retorna códigos de erro conhecidos para permitir que o
+ * Python identifique a ausência de libusb e siga pelos fallbacks.
+ */
+int usb_initialize(void) { return -ENOTSUP; }
+int usb_open_device(uint16_t vid, uint16_t pid) {
+    (void)vid;
+    (void)pid;
+    return -ENOTSUP;
+}
+int usb_bulk_ping(unsigned char endpoint, unsigned char *data, int length, unsigned int timeout_ms) {
+    (void)endpoint;
+    (void)data;
+    (void)length;
+    (void)timeout_ms;
+    return -ENOTSUP;
+}
+int usb_control_probe(uint8_t request_type, uint8_t request, uint16_t value, uint16_t index, unsigned char *data, uint16_t length, unsigned int timeout_ms) {
+    (void)request_type;
+    (void)request;
+    (void)value;
+    (void)index;
+    (void)data;
+    (void)length;
+    (void)timeout_ms;
+    return -ENOTSUP;
+}
+void usb_shutdown(void) {}
+
+#endif /* _WIN32 */
+
 /*
  * Para compilar:
- *   gcc -shared -fPIC usb_controller.c -lusb-1.0 -o libusb_controller.so
+ *   gcc -shared -fPIC usb_controller.c -lusb-1.0 -o libusb_controller.so (Linux)
+ *   gcc -shared usb_controller.c -o libusb_controller.dll (Windows)
  */
