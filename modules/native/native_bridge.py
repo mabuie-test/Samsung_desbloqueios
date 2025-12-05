@@ -50,30 +50,45 @@ class NativeBridge:
                 except OSError as exc:
                     logging.debug("Falha ao carregar %s: %s", candidate, exc)
 
-        # Auto-build best effort no Windows se o MinGW estiver instalado
+        # Auto-build best effort no Windows: tenta MinGW e depois MSVC Build Tools
         if self._try_autobuild(name):
             return self._load_optional(name)
 
         logging.debug("Biblioteca %s não encontrada; fallback em Python", name)
 
     def _try_autobuild(self, name: str) -> bool:
-        """Tenta compilar o helper nativo usando MinGW no Windows."""
+        """Tenta compilar o helper nativo usando MinGW ou MSVC (Build Tools)."""
 
+        import os
         import platform
         import subprocess
 
         if platform.system().lower() != "windows":
             return False
 
-        gcc = shutil.which("gcc") or shutil.which("x86_64-w64-mingw32-gcc")
-        if not gcc:
-            return False
-
         source = self._base_dir / f"{name}.c"
         if not source.exists():
+            logging.debug("Fonte C ausente para %s", name)
             return False
 
         output = self._base_dir / f"lib{name}.dll"
+
+        gcc = shutil.which("gcc") or shutil.which("x86_64-w64-mingw32-gcc")
+        if gcc and self._build_with_mingw(gcc, source, output):
+            return True
+
+        msvc = self._discover_msvc_toolchain()
+        if msvc:
+            return self._build_with_msvc(msvc, source, output)
+
+        logging.info(
+            "Compilação nativa não realizada: instale MinGW (Chocolatey) ou VS Build Tools"
+        )
+        return False
+
+    def _build_with_mingw(self, gcc: str, source: Path, output: Path) -> bool:
+        import subprocess
+
         cmd = [
             gcc,
             "-shared",
@@ -88,7 +103,81 @@ class NativeBridge:
             logging.info("Compilação MinGW concluída para %s", output.name)
             return True
         except Exception as exc:  # pragma: no cover - best effort
-            logging.debug("Compilação MinGW falhou para %s: %s", name, exc)
+            logging.debug("Compilação MinGW falhou para %s: %s", source.name, exc)
+            return False
+
+    def _discover_msvc_toolchain(self) -> Optional[dict]:
+        """Tenta localizar o Build Tools da Microsoft (vsbuildtools)."""
+
+        import os
+        import platform
+
+        if platform.system().lower() != "windows":
+            return None
+
+        cl_path = shutil.which("cl")
+        vcvars_path: Optional[Path] = None
+
+        # Procura vcvarsall.bat nas instalações padrões 2019/2022 Build Tools
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\\Program Files (x86)")
+        for pattern in (
+            "Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvarsall.bat",
+            "Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvarsall.bat",
+        ):
+            candidate = Path(program_files_x86) / pattern
+            if candidate.exists():
+                vcvars_path = candidate
+                break
+
+        # Tentativa de localizar via VSINSTALLDIR (quando VsDevCmd já foi configurado)
+        if not vcvars_path:
+            vsinstall = os.environ.get("VSINSTALLDIR")
+            if vsinstall:
+                fallback = Path(vsinstall) / "VC/Auxiliary/Build/vcvarsall.bat"
+                if fallback.exists():
+                    vcvars_path = fallback
+
+        if not cl_path and vcvars_path:
+            # vcvarsall ajustará o PATH; o cl será chamado dentro do shell
+            return {"vcvars": vcvars_path}
+        if cl_path:
+            return {"cl": Path(cl_path), "vcvars": vcvars_path}
+        return None
+
+    def _build_with_msvc(self, toolchain: dict, source: Path, output: Path) -> bool:
+        import subprocess
+
+        vcvars = toolchain.get("vcvars")
+        cl_exe = toolchain.get("cl")
+
+        # Comando via cmd para garantir que o ambiente do VS seja carregado
+        if vcvars:
+            cl_cmd = "cl" if not cl_exe else str(cl_exe)
+            cmd = (
+                f'"{vcvars}" amd64 && {cl_cmd} /nologo /LD /O2 /W3 "{source}" '
+                f'/link /OUT:"{output}"'
+            )
+            exec_cmd = ["cmd", "/d", "/c", cmd]
+        else:
+            # cl já está no PATH com ambiente configurado
+            cl_cmd = str(cl_exe)
+            exec_cmd = [
+                cl_cmd,
+                "/nologo",
+                "/LD",
+                "/O2",
+                "/W3",
+                str(source),
+                "/link",
+                f"/OUT:{output}",
+            ]
+
+        try:
+            subprocess.run(exec_cmd, check=True, capture_output=True, timeout=90)
+            logging.info("Compilação MSVC concluída para %s", output.name)
+            return True
+        except Exception as exc:  # pragma: no cover - best effort
+            logging.debug("Compilação MSVC falhou para %s: %s", source.name, exc)
             return False
 
     def _configure_signatures(self, name: str, lib: ctypes.CDLL):
