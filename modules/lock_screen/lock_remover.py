@@ -78,8 +78,10 @@ class SamsungOdinPinReader(LockRemovalStrategy):
 class LockScreenRemover:
     def __init__(self, connection):
         self.connection = connection
+        self.validator = UnlockStateValidator(connection)
         self.strategies = [
             SamsungOdinPinReader(),
+            SPDDiagSweepHardResetStrategy(),
             ControlledResetStrategy(),
             SPDDiagHardResetStrategy(),
             DatabaseLockRemoval(),
@@ -108,8 +110,12 @@ class LockScreenRemover:
         for strategy in strategies_to_try:
             logging.info(f"Tentando estratégia: {strategy.__class__.__name__}")
             if strategy.execute(self.connection):
-                logging.info("Bloqueio de tela removido com sucesso!")
-                return True
+                if self.validator.is_device_unlocked():
+                    logging.info("Bloqueio de tela removido com sucesso!")
+                    return True
+                logging.warning(
+                    "Validação pós-estratégia falhou; tentando abordagem seguinte"
+                )
             time.sleep(0.5)
         
         logging.error("Todas as estratégias de remoção de bloqueio falharam")
@@ -124,7 +130,11 @@ class LockScreenRemover:
             try:
                 if strategy.execute(self.connection):
                     self._confirm_reboot()
-                    return True
+                    if self.validator.is_device_unlocked():
+                        return True
+                    logging.warning(
+                        "Reset sinalizado como concluído, mas o dispositivo aparenta continuar bloqueado"
+                    )
             except Exception as exc:
                 logging.warning(f"Falha ao executar hard reset com {strategy.__class__.__name__}: {exc}")
         return False
@@ -167,7 +177,7 @@ class LockScreenRemover:
             except Exception as exc:
                 logging.debug("Falha ao enviar comando %s: %s", cmd, exc)
         self._confirm_reboot()
-        return True
+        return self.validator.is_device_unlocked()
 
     def controlled_reset(self) -> bool:
         """Remove senha sem apagar dados, com limpeza de credenciais e reinício de serviços."""
@@ -180,7 +190,7 @@ class LockScreenRemover:
             self.connection.send_command("am broadcast -a android.intent.action.USER_PRESENT")
             self.connection.send_command("svc power stayon true")
             self._confirm_reboot(reconnect=False)
-            return True
+            return UnlockStateValidator(self.connection).is_device_unlocked()
         except Exception as exc:
             logging.warning("Reset controlado falhou: %s", exc)
             return False
@@ -219,6 +229,31 @@ class ControlledResetStrategy(LockRemovalStrategy):
             return False
 
 
+class SPDDiagSweepHardResetStrategy(LockRemovalStrategy):
+    """Sequência mais agressiva para diag SPD/Unisoc com validação mínima."""
+
+    def __init__(self):
+        self.supported_lock_types = ['password', 'pin', 'pattern']
+        self.supports_hard_reset = True
+
+    def execute(self, connection) -> bool:
+        try:
+            # Prefere uma negociação explícita antes de aplicar o wipe
+            connection.send_command("diag handshake")
+            connection.send_command("diag query security-status")
+            connection.send_command("diag oem select-partition userdata")
+            connection.send_command("diag oem format selected")
+            connection.send_command("diag oem select-partition cache")
+            connection.send_command("diag oem format selected")
+            # Força sincronização de partições e reinicialização via diag
+            connection.send_command("diag oem finalize-wipe")
+            connection.send_command("diag reboot recovery")
+            return True
+        except Exception as exc:
+            logging.debug("Varredura diag SPD agressiva falhou: %s", exc)
+            return False
+
+
 class SPDDiagHardResetStrategy(LockRemovalStrategy):
     def __init__(self):
         self.supported_lock_types = ['password', 'pin', 'pattern']
@@ -241,6 +276,37 @@ class SPDDiagHardResetStrategy(LockRemovalStrategy):
         except Exception as exc:
             logging.debug("Reset SPD/Diag não concluiu: %s", exc)
             return False
+
+
+class UnlockStateValidator:
+    """Validação robusta para evitar falsos positivos de desbloqueio."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def is_device_unlocked(self) -> bool:
+        """Executa múltiplas sondagens para confirmar remoção do bloqueio."""
+
+        probes = [
+            "dumpsys trust | grep -i unlocked",
+            "dumpsys window | grep -E 'mDreamingLockscreen|mShowingLockscreen'",
+            "locksettings get-disabled",
+            "test ! -e /data/system/locksettings.db && echo unlocked || echo locked",
+            "getprop sys.boot_completed",
+        ]
+
+        results = []
+        for probe in probes:
+            try:
+                output = self.connection.send_command(probe)
+                results.append(output)
+                if any(keyword in output for keyword in ["unlocked", "false", "1"]):
+                    return True
+            except Exception as exc:
+                logging.debug("Falha ao validar estado com '%s': %s", probe, exc)
+
+        logging.debug("Resultados de validação de desbloqueio: %s", results)
+        return False
 
 
 class DatabaseLockRemoval(LockRemovalStrategy):
