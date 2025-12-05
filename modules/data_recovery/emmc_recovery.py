@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import subprocess
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -92,22 +93,55 @@ class EMMCDataRecovery:
             self.connection_handler.send(f"heimdall print-pit --no-reboot")
             self.connection_handler.send(f"heimdall download --{partition} {target}")
             return
+        elif current_name == "adb":
+            self._adb_shell(f"dd if=/dev/block/by-name/{partition} of={remote_tmp} bs=4096")
+        elif current_name == "fastboot":
+            self.connection_handler.send(f"flash:raw {partition} {remote_tmp}")
         else:
             self.connection_handler.send(f"dd if=/dev/block/by-name/{partition} of={remote_tmp} bs=4096")
 
         # Pull file when remote staging is used
         target = destination / f"{partition}.img"
         try:
-            self.connection_handler.send(f"pull {remote_tmp} {target}")
+            if current_name == "adb":
+                self._adb_pull(remote_tmp, target)
+            elif current_name == "fastboot":
+                # Algumas ferramentas customizadas exportam via fastboot fetch
+                self.connection_handler.send(f"fetch {remote_tmp} {target}")
+            else:
+                self.connection_handler.send(f"pull {remote_tmp} {target}")
         except Exception:
             # Em alguns modos apenas o host consegue ler via bulk; tenta leitura direta
             if current_name == "usb_raw":
                 self.connection_handler.send(f"usb_raw read --partition {partition} --output {target}")
             elif current_name == "serial":
-                self.connection_handler.send(f"serial read --partition {partition} --output {target}")
+                # sem canal de leitura confiável, sinaliza falha em vez de sucesso silencioso
+                raise ConnectionError("Canal serial não suporta leitura direta da partição")
             else:
                 raise
 
         # Pequena espera para garantir flush completo em portas seriais
         time.sleep(0.5)
+
+    def _adb_shell(self, command: str):
+        strategy = getattr(self.connection_handler._handler, "current_strategy", None)
+        device_id = getattr(strategy, "device_id", None)
+        cmd = ["adb"]
+        if device_id:
+            cmd.extend(["-s", device_id])
+        cmd.extend(["shell", command])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Falha ao executar comando ADB")
+
+    def _adb_pull(self, remote: str, local: Path):
+        strategy = getattr(self.connection_handler._handler, "current_strategy", None)
+        device_id = getattr(strategy, "device_id", None)
+        cmd = ["adb"]
+        if device_id:
+            cmd.extend(["-s", device_id])
+        cmd.extend(["pull", remote, str(local)])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Falha ao copiar partição via ADB")
 

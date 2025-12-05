@@ -39,6 +39,13 @@ def _decode_pattern_file(dump_path: Path) -> str:
     return sequence
 
 
+def _supports_android_shell(connection) -> bool:
+    """Retorna True se o canal expõe shell ADB real (evita falsos positivos)."""
+
+    name = connection.__class__.__name__.lower()
+    return hasattr(connection, "device_id") or "adb" in name
+
+
 class SamsungOdinPinReader(LockRemovalStrategy):
     def __init__(self):
         self.supported_lock_types = ["pin", "pattern", "password"]
@@ -216,6 +223,9 @@ class ControlledResetStrategy(LockRemovalStrategy):
 
     def execute(self, connection) -> bool:
         """Tenta limpar bloqueios sem formatação completa."""
+        if not _supports_android_shell(connection):
+            logging.debug("Reset controlado ignorado: shell Android indisponível nesta conexão")
+            return False
         try:
             connection.send_command("cmd lock_settings clear --old")
             connection.send_command("settings put secure lock_screen_allow_private_notifications 1")
@@ -315,6 +325,9 @@ class DatabaseLockRemoval(LockRemovalStrategy):
 
     def execute(self, connection) -> bool:
         """Remove bloqueio via manipulação de banco de dados"""
+        if not _supports_android_shell(connection):
+            logging.debug("Remoção via banco de dados ignorada: shell Android indisponível")
+            return False
         try:
             logging.info("Tentando remoção de bloqueio via manipulação de banco de dados")
 

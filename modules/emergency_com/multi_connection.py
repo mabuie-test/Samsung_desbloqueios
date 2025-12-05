@@ -800,9 +800,33 @@ class ConnectionHandler:
                 return {"serial": serial, "model": model}
             except Exception:
                 return dict(self._last_connected_identity)
+        if self.current_name in {"serial", "spd_diag"}:
+            identity = self._probe_serial_identity()
+            if identity:
+                self._last_connected_identity.update(identity)
+                return dict(self._last_connected_identity)
         if self.current_name in {"odin", "mtp"}:
             return dict(self._last_connected_identity) or {"serial": "", "model": "Samsung (Download/MTP)"}
         return dict(self._last_connected_identity)
+
+    def _probe_serial_identity(self) -> Dict[str, str]:
+        """Tenta identificar o aparelho via comandos AT comuns em diag/serial."""
+
+        if not self.current_strategy or not hasattr(self.current_strategy, "send_command"):
+            return {}
+        replies = {}
+        for cmd, key in (("AT+CGMI", "brand"), ("AT+CGMM", "model"), ("AT+CGSN", "serial"), ("ATI", "info")):
+            try:
+                out = self.current_strategy.send_command(cmd).strip()
+            except Exception:
+                continue
+            if not out:
+                continue
+            if key == "info" and "Manufacturer" in out:
+                replies.setdefault("brand", out)
+            else:
+                replies.setdefault(key, out)
+        return replies
 
     def _merge_identity(self, device_info: Dict[str, str]) -> Dict[str, str]:
         """Mescla dados capturados durante descoberta para enriquecer identidade."""
@@ -821,14 +845,16 @@ class ConnectionHandler:
         if match:
             for key in ("brand", "model", "serial", "connection_type"):
                 base.setdefault(key, match.get(key, ""))
-            # Se ainda faltar modelo, derive a partir do rótulo para evitar "android generic"
             if not base.get("model") and match.get("label"):
-                base["model"] = match.get("label")
+                # tenta extrair texto antes de parênteses para evitar "android generic"
+                label = match.get("label", "")
+                base["model"] = label.split("(")[0].strip() or label
             if not base.get("brand") and match.get("vendor_id"):
                 base["brand"] = _VENDOR_BRANDS.get(match.get("vendor_id", ""), "")
         else:
-            # fallback extra com map de vendors
             if not base.get("brand") and base.get("vendor_id"):
                 base["brand"] = _VENDOR_BRANDS.get(base.get("vendor_id", ""), "")
+            if not base.get("model") and base.get("label"):
+                base["model"] = base.get("label")
         return base
 

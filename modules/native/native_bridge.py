@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -25,8 +26,21 @@ class NativeBridge:
         self._load_optional("edl_controller")
 
     def _load_optional(self, name: str):
+        """Carrega a lib se existir ou tenta construir rapidamente no Windows.
+
+        Em ambientes Windows o MinGW costuma produzir DLLs sem o prefixo
+        ``lib``. Por isso, verificamos variações com e sem o prefixo e,
+        na ausência do artefato, tentamos compilar automaticamente caso o
+        ``gcc`` do MinGW esteja disponível no PATH (via Chocolatey, como
+        mencionado pelo usuário).
+        """
+
+        candidates = []
         for extension in ("so", "dll", "dylib"):
-            candidate = self._base_dir / f"lib{name}.{extension}"
+            candidates.append(self._base_dir / f"lib{name}.{extension}")
+            candidates.append(self._base_dir / f"{name}.{extension}")
+
+        for candidate in candidates:
             if candidate.exists():
                 try:
                     self._libraries[name] = ctypes.CDLL(str(candidate))
@@ -35,7 +49,47 @@ class NativeBridge:
                     return
                 except OSError as exc:
                     logging.debug("Falha ao carregar %s: %s", candidate, exc)
+
+        # Auto-build best effort no Windows se o MinGW estiver instalado
+        if self._try_autobuild(name):
+            return self._load_optional(name)
+
         logging.debug("Biblioteca %s não encontrada; fallback em Python", name)
+
+    def _try_autobuild(self, name: str) -> bool:
+        """Tenta compilar o helper nativo usando MinGW no Windows."""
+
+        import platform
+        import subprocess
+
+        if platform.system().lower() != "windows":
+            return False
+
+        gcc = shutil.which("gcc") or shutil.which("x86_64-w64-mingw32-gcc")
+        if not gcc:
+            return False
+
+        source = self._base_dir / f"{name}.c"
+        if not source.exists():
+            return False
+
+        output = self._base_dir / f"lib{name}.dll"
+        cmd = [
+            gcc,
+            "-shared",
+            "-o",
+            str(output),
+            str(source),
+            "-O2",
+            "-Wall",
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+            logging.info("Compilação MinGW concluída para %s", output.name)
+            return True
+        except Exception as exc:  # pragma: no cover - best effort
+            logging.debug("Compilação MinGW falhou para %s: %s", name, exc)
+            return False
 
     def _configure_signatures(self, name: str, lib: ctypes.CDLL):
         if name == "kernel_module":
