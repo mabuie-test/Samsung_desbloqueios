@@ -204,11 +204,17 @@ class SamsungUnlockGUI:
         ttk.Button(self.lock_removal_frame, text="Reset controlado (sem wipe)",
                   command=self.controlled_reset).grid(row=5, column=0, columnspan=2, pady=(4, 2), sticky="ew")
 
+        self.recovery_destination = tk.StringVar(value="recuperacao_emmc")
+        ttk.Label(self.lock_removal_frame, text="Destino da recuperação:").grid(row=6, column=0, sticky="w")
+        ttk.Entry(self.lock_removal_frame, textvariable=self.recovery_destination, width=30).grid(row=6, column=1, padx=4, sticky="ew")
+        ttk.Button(self.lock_removal_frame, text="Escolher pasta", command=self.choose_recovery_dir).grid(row=7, column=0, pady=2, sticky="ew")
+        ttk.Button(self.lock_removal_frame, text="Recuperar dados USB/eMMC", command=self.recover_data).grid(row=7, column=1, pady=2, sticky="ew")
+
         self.lock_progress = ttk.Progressbar(self.lock_removal_frame, mode="determinate", length=250)
-        self.lock_progress.grid(row=6, column=0, columnspan=2, padx=5, pady=5)
+        self.lock_progress.grid(row=8, column=0, columnspan=2, padx=5, pady=5)
 
         self.lock_status = ttk.Label(self.lock_removal_frame, text="Pronto")
-        self.lock_status.grid(row=7, column=0, columnspan=2)
+        self.lock_status.grid(row=9, column=0, columnspan=2)
     
     def setup_log_tab(self):
         """Configura aba de logs"""
@@ -525,6 +531,34 @@ class SamsungUnlockGUI:
                 messagebox.showerror("Erro", str(exc))
 
         threading.Thread(target=controlled_reset_thread, daemon=True).start()
+
+    def choose_recovery_dir(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.recovery_destination.set(path)
+
+    def recover_data(self):
+        def recover_thread():
+            try:
+                self.lock_status.config(text="Recuperando dados do eMMC...")
+                self.lock_progress['value'] = 0
+                dest = self.recovery_destination.get()
+                if self.controller.recover_data(
+                    dest, progress_cb=lambda v: self.lock_progress.configure(value=v), log_cb=self._log_connection
+                ):
+                    self.lock_progress['value'] = 100
+                    self.lock_status.config(text=f"Dados salvos em {dest}")
+                    messagebox.showinfo("Sucesso", f"Recuperação concluída em {dest}")
+                else:
+                    self.lock_progress['value'] = 0
+                    self.lock_status.config(text="Falha na recuperação de dados")
+                    messagebox.showerror("Erro", "Recuperação falhou")
+            except Exception as exc:
+                self.lock_progress['value'] = 0
+                self.lock_status.config(text=f"Erro: {exc}")
+                messagebox.showerror("Erro", str(exc))
+
+        threading.Thread(target=recover_thread, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Firmware

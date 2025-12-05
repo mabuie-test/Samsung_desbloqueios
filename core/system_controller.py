@@ -21,6 +21,7 @@ from modules.device_support.chipset_support import (
 )
 from modules.device_support.operations import ChipsetOperations
 from modules.emergency_com.multi_connection import ConnectionHandler
+from modules.data_recovery import EMMCDataRecovery
 from modules.firmware import (
     FirmwareNeutralizer,
     MultiBrandNeutralizationManager,
@@ -99,6 +100,7 @@ class SamsungUnlockCore:
             self.connection_handler, self.native_bridge
         )
         self.lock_remover = LockScreenRemovalOrchestrator(self.connection_handler)
+        self.data_recovery = EMMCDataRecovery(self.connection_handler, self.operations)
         self.hacker_toolkit = HackerModeOrchestrator(
             self.connection_handler,
             self.native_coordinator,
@@ -200,6 +202,21 @@ class SamsungUnlockCore:
             logging.error("Erro durante o desbloqueio: %s", exc)
             return False
 
+    def recover_data_over_usb(self, destination: Path, partitions: Optional[List[str]] = None, *, progress_cb=None, log_cb=None) -> bool:
+        """Fluxo centralizado para recuperar dados via leitura direta do eMMC."""
+
+        if not self.connection_handler.is_connected():
+            raise ConnectionError("Dispositivo não conectado")
+
+        profile = self.connection_handler.device_profile
+        return self.data_recovery.recover_partitions(
+            destination,
+            partitions=partitions,
+            profile=profile,
+            progress_cb=progress_cb,
+            log_cb=log_cb,
+        )
+
     def remove_screen_lock(self, lock_type=None):
         """Remove bloqueio de tela com um clique"""
         try:
@@ -228,6 +245,15 @@ class SamsungUnlockCore:
             return self.lock_remover.controlled_reset()
         except Exception as exc:  # pragma: no cover - defensive
             logging.error("Falha ao executar reset controlado: %s", exc)
+            return False
+
+    def recover_emmc_data(self, destination: Path, partitions: Optional[List[str]] = None, *, progress_cb=None, log_cb=None) -> bool:
+        """Rotina centralizada para recuperar dados via USB/diag lendo o eMMC."""
+
+        try:
+            return self.recover_data_over_usb(destination, partitions, progress_cb=progress_cb, log_cb=log_cb)
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error("Falha na recuperação USB/eMMC: %s", exc)
             return False
 
     def read_samsung_pin_via_odin(self) -> bool:

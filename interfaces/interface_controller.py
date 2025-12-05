@@ -138,6 +138,14 @@ class InterfaceController:
             log_cb,
         )
 
+    def recover_data(self, destination: str, *, progress_cb=None, log_cb=None) -> bool:
+        return self._with_feedback(
+            "Recuperação USB/eMMC",
+            lambda: self.core.recover_emmc_data(Path(destination), progress_cb=progress_cb, log_cb=log_cb),
+            progress_cb,
+            log_cb,
+        )
+
     def read_samsung_pin(self, *, progress_cb=None, log_cb=None) -> bool:
         return self._with_feedback(
             "Leitura de PIN/padrão (Odin)",

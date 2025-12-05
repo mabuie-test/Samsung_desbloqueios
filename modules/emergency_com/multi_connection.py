@@ -588,9 +588,17 @@ class ConnectionHandler:
 
     def _strategy_available(self, name: str) -> bool:
         if name == "adb":
-            return _binary_available("adb")
+            available = _binary_available("adb")
+            if not available and not self._warned_adb_missing:
+                logging.warning("ADB indisponível durante descoberta/conexão; verifique PATH ou instalação")
+                self._warned_adb_missing = True
+            return available
         if name == "fastboot":
-            return _binary_available("fastboot")
+            available = _binary_available("fastboot")
+            if not available and not self._warned_fastboot_missing:
+                logging.warning("Fastboot indisponível durante descoberta/conexão; verifique PATH ou instalação")
+                self._warned_fastboot_missing = True
+            return available
         if name == "odin":
             return True
         return True

@@ -333,6 +333,15 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.controlled_reset_button = QtWidgets.QPushButton("Reset controlado (sem wipe)")
         form.addRow(self.controlled_reset_button)
 
+        self.recovery_destination = QtWidgets.QLineEdit("recuperacao_emmc")
+        self.recovery_browse = QtWidgets.QPushButton("Escolher pasta")
+        self.recovery_button = QtWidgets.QPushButton("Recuperar dados USB/eMMC")
+        recovery_row = QtWidgets.QHBoxLayout()
+        recovery_row.addWidget(self.recovery_destination)
+        recovery_row.addWidget(self.recovery_browse)
+        form.addRow("Destino da recuperação:", recovery_row)
+        form.addRow(self.recovery_button)
+
         self.lock_progress = QtWidgets.QProgressBar()
         self.lock_progress.setRange(0, 100)
         form.addRow("Progresso:", self.lock_progress)
@@ -347,6 +356,8 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
         self.hardreset_exynos_button.clicked.connect(lambda: self._hard_reset_chipset("exynos"))
         self.hardreset_unisoc_button.clicked.connect(lambda: self._hard_reset_chipset("unisoc"))
         self.controlled_reset_button.clicked.connect(self._controlled_reset)
+        self.recovery_browse.clicked.connect(self._choose_recovery_dir)
+        self.recovery_button.clicked.connect(self._recover_data)
 
         self.tab_widget.addTab(widget, "Remoção de Bloqueio")
 
@@ -645,6 +656,33 @@ class SamsungUnlockQtWindow(QtWidgets.QMainWindow):
                     self._show_error("Erro", "Reset controlado falhou")
             except Exception as exc:
                 logging.exception("Reset controlado falhou")
+                self._update_progress_bar(self.lock_progress, 0)
+                self._update_status(self.lock_status, f"Erro: {exc}")
+                self._show_error("Erro", str(exc))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _choose_recovery_dir(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Selecionar destino de recuperação")
+        if path:
+            self.recovery_destination.setText(path)
+
+    def _recover_data(self) -> None:
+        def task():
+            try:
+                dest = self.recovery_destination.text()
+                self._update_status(self.lock_status, "Recuperando dados do eMMC...")
+                self._update_progress_bar(self.lock_progress, 10)
+                if self.controller.recover_data(dest):
+                    self._update_progress_bar(self.lock_progress, 100)
+                    self._update_status(self.lock_status, f"Dados salvos em {dest}")
+                    self._show_info("Sucesso", f"Recuperação concluída em {dest}")
+                else:
+                    self._update_progress_bar(self.lock_progress, 0)
+                    self._update_status(self.lock_status, "Falha na recuperação de dados")
+                    self._show_error("Erro", "Recuperação falhou")
+            except Exception as exc:
+                logging.exception("Recuperação de dados falhou")
                 self._update_progress_bar(self.lock_progress, 0)
                 self._update_status(self.lock_status, f"Erro: {exc}")
                 self._show_error("Erro", str(exc))
