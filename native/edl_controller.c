@@ -3,8 +3,20 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "unlock_modules.h"
+
 #ifndef _WIN32
+#if __has_include(<libusb-1.0/libusb.h>)
+#define HAS_LIBUSB 1
 #include <libusb-1.0/libusb.h>
+#else
+#define HAS_LIBUSB 0
+typedef struct libusb_context libusb_context;
+typedef struct libusb_device_handle libusb_device_handle;
+static inline const char *libusb_error_name(int err) {(void)err; return "libusb headers ausentes";}
+#define LIBUSB_OPTION_LOG_LEVEL 0
+#define LIBUSB_LOG_LEVEL_WARNING 0
+#endif
 
 /*
  * edl_controller.c
@@ -14,6 +26,7 @@
  * dependências adicionais.
  */
 
+#if HAS_LIBUSB
 static libusb_context *ctx = NULL;
 static libusb_device_handle *dev = NULL;
 
@@ -91,6 +104,31 @@ void edl_shutdown(void) {
         ctx = NULL;
     }
 }
+
+#else /* HAS_LIBUSB */
+
+int edl_init(void) { return -ENOTSUP; }
+int edl_open(uint16_t vid, uint16_t pid) {
+    (void)vid;
+    (void)pid;
+    return -ENOTSUP;
+}
+int edl_hello(unsigned char *response, int length) {
+    (void)response;
+    (void)length;
+    return -ENOTSUP;
+}
+int edl_execute(unsigned char *cmd, int cmd_len, unsigned char *resp, int resp_len, unsigned int timeout_ms) {
+    (void)cmd;
+    (void)cmd_len;
+    (void)resp;
+    (void)resp_len;
+    (void)timeout_ms;
+    return -ENOTSUP;
+}
+void edl_shutdown(void) {}
+
+#endif /* HAS_LIBUSB */
 
 #else /* _WIN32 */
 

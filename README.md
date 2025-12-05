@@ -23,7 +23,8 @@ O Samsung Unlock Pro é uma aplicação modular e complexa desenvolvida para dis
 ## 🖥️ Requisitos do Sistema
 
 ### Software:
-- Python 3.8 ou superior
+- GCC ou Clang para compilar o binário C
+- libusb-1.0 (headers + biblioteca para suporte USB)
 - ADB (Android Debug Bridge) instalado
 - Drivers Samsung USB instalados
 - Linux (recomendado) ou Windows com WSL
@@ -35,48 +36,39 @@ O Samsung Unlock Pro é uma aplicação modular e complexa desenvolvida para dis
 
 ## 🚀 Instalação
 
-### Método 1: Instalação Automática
+### Build e instalação (100% C nativo)
 ```bash
-# Clone o repositório
 git clone https://github.com/seuusuario/samsung-unlock-pro.git
-cd samsung-unlock-pro
+cd samsung-unlock-pro/native
 
-# Execute o script de instalação
-chmod +x scripts/install.sh
-./scripts/install.sh
+# Instale dependências de desenvolvimento (exemplo no Debian/Ubuntu):
+sudo apt-get update && sudo apt-get install -y build-essential libusb-1.0-0-dev adb
+
+# Compile o binário C
+make
+
+# Opcional: torne disponível no PATH
+sudo install -m 755 samsung_unlock /usr/local/bin/
 ```
 
-### Método 2: Instalação Manual
-```bash
-# Clone o repositório
-git clone https://github.com/seuusuario/samsung-unlock-pro.git
-cd samsung-unlock-pro
-
-# Instale as dependências Python
-pip3 install -r requirements.txt
-
-# Compile os módulos nativos
-chmod +x scripts/build.sh
-./scripts/build.sh
-
-# Configure as permissões
-chmod +x drivers/usb_driver/usb_controller
-```
+> Nota: se os headers/biblioteca do libusb não estiverem disponíveis, o `make`
+> ainda compila com stubs e sem varredura USB/EDL funcional. Instale
+> `libusb-1.0-0-dev` para suporte completo.
 
 ## 📖 Guia de Uso
 
 ### 1. Conexão com o Dispositivo
 
-#### Via Interface Gráfica:
-1. Execute o programa: `python3 main.py --gui`
-2. Na aba "Conexão", selecione o modo de conexão
-3. Insira o modelo e serial do dispositivo
-4. Clique em "Conectar"
-
-#### Via Linha de Comando:
+#### Via Linha de Comando (C nativo):
 ```bash
-python3 main.py --cli
-connect --model SM-G998B --serial R58M40KMZ0E --connection adb
+# Listar dispositivos ADB e diagnosticar ambiente
+./native/samsung_unlock --diag --list
+
+# Entrar em shell e ativar MTP
+./native/samsung_unlock --shell "id" --enable-mtp
+
+# Varredura USB de baixo nível
+./native/samsung_unlock --usb-scan
 ```
 
 ### 2. Remoção de MDM Persistente
@@ -111,16 +103,13 @@ connect --model SM-G998B --serial R58M40KMZ0E --connection adb
 
 #### Modo EDL (Emergency Download):
 ```bash
-python3 main.py --cli
-connect --model SM-G998B --connection edl
-force_edl_mode
+# Realiza o handshake hello num dispositivo Qualcomm 05c6:9008
+./native/samsung_unlock --edl-handshake 05c6 9008
 ```
 
 #### Modo de Recuperação:
 ```bash
-python3 main.py --cli
-connect --model SM-G998B --connection adb
-reboot recovery
+./native/samsung_unlock --reboot recovery
 ```
 
 ## 🏗️ Arquitetura do Sistema

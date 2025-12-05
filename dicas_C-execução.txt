@@ -3,8 +3,9 @@ Como compilar e executar a versão nativa em C
 
 Pré-requisitos
 --------------
-- Linux com GCC instalado.
-- ADB (Android Platform Tools) no PATH para que os comandos funcionem.
+- Linux com GCC/Clang e `make` instalados.
+- Pacotes de desenvolvimento do libusb (`libusb-1.0-0-dev` em Debian/Ubuntu).
+- ADB (Android Platform Tools) no PATH para comandos de debug.
 
 Compilação
 ----------
@@ -12,11 +13,18 @@ Compilação
    ```bash
    cd native
    ```
-2. Compile o binário:
+2. Instale dependências (exemplo no Debian/Ubuntu):
+   ```bash
+   sudo apt-get update && sudo apt-get install -y build-essential libusb-1.0-0-dev adb
+   ```
+3. Compile o binário:
    ```bash
    make
    ```
    O executável `samsung_unlock` será gerado na mesma pasta.
+   Caso o libusb de desenvolvimento não esteja presente, o binário é gerado com
+   stubs para USB/EDL apenas para fins de compilação; instale `libusb-1.0-0-dev`
+   para ter acesso às operações nativas.
 
 Execução
 --------
@@ -31,6 +39,26 @@ Execução
 - Listar dispositivos conectados via ADB:
   ```bash
   ./samsung_unlock --list
+  ```
+- Varredura USB nativa (usa libusb, útil para confirmar VID/PID em EDL):
+  ```bash
+  ./samsung_unlock --usb-scan
+  ```
+- Handshake EDL em dispositivos Qualcomm (exemplo VID/PID 05c6:9008):
+  ```bash
+  ./samsung_unlock --edl-handshake 05c6 9008
+  ```
+- Montar partição como leitura-escrita usando o módulo de kernel exposto:
+  ```bash
+  ./samsung_unlock --km-mount /system
+  ```
+- Definir flags internas no módulo de kernel:
+  ```bash
+  ./samsung_unlock --km-flag allow_rw
+  ```
+- Analisar ficheiros de log em busca de padrões de segurança:
+  ```bash
+  ./samsung_unlock --pm-scan /tmp/recovery.log
   ```
 - Reiniciar um dispositivo (modos suportados: normal, recovery, download):
   ```bash

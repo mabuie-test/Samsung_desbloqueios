@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "unlock_modules.h"
+
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/ioctl.h>
